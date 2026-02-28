@@ -588,39 +588,52 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if data == "clearall_confirm":
         await q.message.edit_text("🗑️ Silme işlemi başladı, lütfen bekleyin...")
         try:
-            chat_msgs = await ctx.bot.get_chat(GROUP_ID)
-            # En son mesaj ID'sini almak için grup bilgisini kullan
-            # Pragmatik yaklaşım: mevcut bot mesajının ID'si etrafından sil
-            last_id = q.message.message_id
-            deleted = 0
-            for i in range(100):
-                try:
-                    await ctx.bot.delete_message(GROUP_ID, last_id - i)
-                    deleted += 1
-                    await asyncio.sleep(0.04)
-                except TelegramError:
-                    pass
-            stats["deleted_messages"] += deleted
-            await q.message.reply_text(f"✅ Tamamlandı! <b>{deleted}</b> mesaj silindi.", parse_mode=ParseMode.HTML)
+            sentinel = await ctx.bot.send_message(GROUP_ID, "🧹")
+            last_id  = sentinel.message_id
+            await ctx.bot.delete_message(GROUP_ID, last_id)
         except TelegramError as e:
-            await q.message.reply_text(f"❌ Hata: {e}")
-        return
-
-    # Purge onay butonları
-    if data.startswith("purge_confirm:"):
-        n = int(data.split(":")[1])
-        ref = int(data.split(":")[2])
-        await q.message.edit_text(f"🧹 Son <b>{n}</b> mesaj siliniyor...", parse_mode=ParseMode.HTML)
+            await q.message.edit_text(f"❌ Grup mesaj ID alınamadı: {e}")
+            return
         deleted = 0
-        for i in range(n + 1):
+        for i in range(1, 102):
             try:
-                await ctx.bot.delete_message(GROUP_ID, ref - i)
+                await ctx.bot.delete_message(GROUP_ID, last_id - i)
                 deleted += 1
                 await asyncio.sleep(0.04)
             except TelegramError:
                 pass
         stats["deleted_messages"] += deleted
-        await q.message.edit_text(f"✅ <b>{deleted}</b> mesaj silindi.", parse_mode=ParseMode.HTML)
+        await q.message.edit_text(
+            f"✅ Tamamlandı! <b>{deleted}</b> mesaj silindi.\n<i>(Erişilemeyen mesajlar atlandı)</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Purge onay butonları
+    if data.startswith("purge_confirm:"):
+        n = int(data.split(":")[1])
+        await q.message.edit_text(f"🧹 Son <b>{n}</b> mesaj siliniyor...", parse_mode=ParseMode.HTML)
+        # Gruba geçici sentinel mesajı gönder → son mesaj ID'sini öğren → sil
+        try:
+            sentinel = await ctx.bot.send_message(GROUP_ID, "🧹")
+            last_id  = sentinel.message_id
+            await ctx.bot.delete_message(GROUP_ID, last_id)
+        except TelegramError as e:
+            await q.message.edit_text(f"❌ Grup mesaj ID alınamadı: {e}")
+            return
+        deleted = 0
+        for i in range(1, n + 2):
+            try:
+                await ctx.bot.delete_message(GROUP_ID, last_id - i)
+                deleted += 1
+                await asyncio.sleep(0.04)
+            except TelegramError:
+                pass
+        stats["deleted_messages"] += deleted
+        await q.message.edit_text(
+            f"✅ <b>{deleted}</b> mesaj silindi.\n<i>(Bazı mesajlar zaten silinmiş veya erişilemez olabilir)</i>",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     if data == "rules":
@@ -1258,24 +1271,31 @@ async def cmd_purge(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args or not ctx.args[0].isdigit():
         await update.message.reply_text("Kullanım: /purge [n]"); return
     n = min(int(ctx.args[0]), 200)
-    msg_id = update.message.message_id
+    chat_id = update.effective_chat.id
+    # Grupta sentinel gönder → gerçek son ID'yi al
+    try:
+        sentinel = await ctx.bot.send_message(chat_id, "🧹")
+        last_id  = sentinel.message_id
+        await ctx.bot.delete_message(chat_id, last_id)
+    except TelegramError as e:
+        await update.message.reply_text(f"❌ Hata: {e}"); return
     deleted = 0
-    for i in range(n + 1):
+    for i in range(1, n + 2):
         try:
-            await ctx.bot.delete_message(update.effective_chat.id, msg_id - i)
+            await ctx.bot.delete_message(chat_id, last_id - i)
             deleted += 1
             await asyncio.sleep(0.04)
         except TelegramError:
             pass
     stats["deleted_messages"] += deleted
-    m = await ctx.bot.send_message(update.effective_chat.id, f"🗑️ {deleted} mesaj silindi.")
-    asyncio.create_task(auto_delete(ctx, update.effective_chat.id, m.message_id, 5))
+    m = await ctx.bot.send_message(chat_id, f"🗑️ {deleted} mesaj silindi.")
+    asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 5))
 
 async def cmd_clearall(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     mid = update.message.message_id
     kb  = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Evet, 100 mesajı sil!", callback_data=f"purge_confirm:100:{mid}"),
+        InlineKeyboardButton("✅ Evet, 100 mesajı sil!", callback_data="purge_confirm:100"),
         InlineKeyboardButton("❌ İptal", callback_data="menu_msgs"),
     ]])
     await update.message.reply_text(
