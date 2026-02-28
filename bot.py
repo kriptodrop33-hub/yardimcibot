@@ -13,7 +13,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
-# ─── Logging ───────────────────────────────────────────────────────────────────
+# ─── Logging ───────────────────────────────────────────────────────────────────a
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO
