@@ -629,59 +629,91 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "clearall_confirm":
+        if not is_admin(uid):
+            await q.answer("⛔ Yetkin yok.", show_alert=True)
+            return
+        chat_id = q.message.chat.id
         await q.message.edit_text("🗑️ Silme işlemi başladı, lütfen bekleyin...")
         try:
-            sentinel = await ctx.bot.send_message(GROUP_ID, "🧹")
+            sentinel = await ctx.bot.send_message(chat_id, "🧹")
             last_id  = sentinel.message_id
-            await ctx.bot.delete_message(GROUP_ID, last_id)
+            await ctx.bot.delete_message(chat_id, last_id)
         except TelegramError as e:
-            await q.message.edit_text(f"❌ Grup mesaj ID alınamadı: {e}")
+            await q.message.edit_text(f"❌ Hata: {e}")
             return
-        deleted = await _bulk_delete(ctx, GROUP_ID, last_id - 1, last_id - 100)
+        deleted = await _bulk_delete(ctx, chat_id, last_id - 1, last_id - 100)
         stats["deleted_messages"] += deleted
-        await q.message.edit_text(
-            f"✅ Tamamlandı! <b>{deleted}</b> mesaj silindi.\n<i>(Erişilemeyen mesajlar atlandı)</i>",
+        result_msg = await ctx.bot.send_message(
+            chat_id,
+            f"✅ <b>{deleted}</b> mesaj silindi.",
             parse_mode=ParseMode.HTML,
         )
+        asyncio.create_task(auto_delete(ctx, chat_id, result_msg.message_id, 5))
+        try:
+            await q.message.delete()
+        except TelegramError:
+            pass
         return
 
-    # Purge N mesaj onay
     if data.startswith("purge_confirm:"):
-        parts = data.split(":")
-        n = int(parts[1])
+        if not is_admin(uid):
+            await q.answer("⛔ Yetkin yok.", show_alert=True)
+            return
+        n       = int(data.split(":")[1])
+        chat_id = q.message.chat.id
         await q.message.edit_text(f"🧹 Son <b>{n}</b> mesaj siliniyor...", parse_mode=ParseMode.HTML)
         try:
-            sentinel = await ctx.bot.send_message(GROUP_ID, "🧹")
+            sentinel = await ctx.bot.send_message(chat_id, "🧹")
             last_id  = sentinel.message_id
-            await ctx.bot.delete_message(GROUP_ID, last_id)
+            await ctx.bot.delete_message(chat_id, last_id)
         except TelegramError as e:
-            await q.message.edit_text(f"❌ Grup mesaj ID alınamadı: {e}")
+            await q.message.edit_text(f"❌ Hata: {e}")
             return
-        deleted = await _bulk_delete(ctx, GROUP_ID, last_id - 1, last_id - n)
+        deleted = await _bulk_delete(ctx, chat_id, last_id - 1, last_id - n)
         stats["deleted_messages"] += deleted
-        await q.message.edit_text(
-            f"✅ <b>{deleted}</b> mesaj silindi.\n<i>(Bazı mesajlar zaten silinmiş veya erişilemez olabilir)</i>",
+        result_msg = await ctx.bot.send_message(
+            chat_id,
+            f"✅ <b>{deleted}</b> mesaj silindi.",
             parse_mode=ParseMode.HTML,
         )
+        asyncio.create_task(auto_delete(ctx, chat_id, result_msg.message_id, 5))
+        try:
+            await q.message.delete()
+        except TelegramError:
+            pass
         return
 
     # Purge after (şu mesajdan sonrasını sil) onay
     if data.startswith("purge_after_confirm:"):
-        from_id = int(data.split(":")[1])
-        await q.message.edit_text(f"⏩ Mesaj <code>{from_id}</code>'den itibaren siliniyor...", parse_mode=ParseMode.HTML)
-        try:
-            sentinel = await ctx.bot.send_message(GROUP_ID, "🧹")
-            last_id  = sentinel.message_id
-            await ctx.bot.delete_message(GROUP_ID, last_id)
-        except TelegramError as e:
-            await q.message.edit_text(f"❌ Grup mesaj ID alınamadı: {e}")
+        if not is_admin(uid): 
+            await q.answer("⛔ Yetkin yok.", show_alert=True)
             return
-        deleted = await _bulk_delete(ctx, GROUP_ID, last_id - 1, from_id)
-        stats["deleted_messages"] += deleted
+        from_id  = int(data.split(":")[1])
+        chat_id  = q.message.chat.id   # DM değil, mesajın olduğu chat
         await q.message.edit_text(
-            f"✅ <b>{deleted}</b> mesaj silindi.\n<i>(Mesaj {from_id}'den en sona kadar)</i>",
+            f"⏩ Siliniyor... (mesaj ID {from_id}'den itibaren)",
+            parse_mode=ParseMode.HTML
+        )
+        try:
+            sentinel = await ctx.bot.send_message(chat_id, "🧹")
+            last_id  = sentinel.message_id
+            await ctx.bot.delete_message(chat_id, last_id)
+        except TelegramError as e:
+            await q.message.edit_text(f"❌ Hata: {e}")
+            return
+        deleted = await _bulk_delete(ctx, chat_id, last_id - 1, from_id)
+        stats["deleted_messages"] += deleted
+        # Sonuç mesajını da kısa süre sonra sil
+        result_msg = await ctx.bot.send_message(
+            chat_id,
+            f"✅ <b>{deleted}</b> mesaj silindi.",
             parse_mode=ParseMode.HTML,
         )
+        asyncio.create_task(auto_delete(ctx, chat_id, result_msg.message_id, 5))
+        try:
+            await q.message.delete()
+        except TelegramError:
+            pass
         return
 
     if data == "purgefrom_cancel":
@@ -1414,40 +1446,35 @@ async def cmd_purge(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 5))
 
 async def cmd_purgefrom(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Grupta bir mesajı reply'layıp /purgefrom yaz → o mesajdan itibaren sil."""
+    """Grupta bir mesajı reply'layıp /purgefrom → o mesajdan itibaren sil."""
     if not is_admin(update.effective_user.id): return
     chat_id = update.effective_chat.id
 
     reply = update.message.reply_to_message
     if not reply:
         m = await update.message.reply_text(
-            "ℹ️ Kullanım: Silmenin başlamasını istediğin mesajı <b>yanıtla</b> ve /purgefrom yaz.",
+            "ℹ️ Silmenin başlamasını istediğin mesajı <b>yanıtla</b> ve /purgefrom yaz.",
             parse_mode=ParseMode.HTML,
         )
         asyncio.create_task(auto_delete(ctx, chat_id, update.message.message_id, 5))
-        asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 5))
+        asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 8))
         return
 
     from_id = reply.message_id
 
-    # Onay mesajı gönder
+    # Onay mesajını GRUPTA gönder
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            f"✅ Evet, {from_id}'den itibaren sil!",
-            callback_data=f"purge_after_confirm:{from_id}"
-        ),
-        InlineKeyboardButton("❌ İptal", callback_data="purgefrom_cancel"),
+        InlineKeyboardButton("✅ Evet, sil!", callback_data=f"purge_after_confirm:{from_id}"),
+        InlineKeyboardButton("❌ İptal",      callback_data="purgefrom_cancel"),
     ]])
-    m = await update.message.reply_text(
-        f"⚠️ <b>Onay Gerekiyor</b>\n\n"
-        f"Mesaj <code>{from_id}</code>'den başlayarak en son mesaja kadar\n"
-        f"<b>tüm mesajlar silinecek.</b>\n\n"
-        f"Bu işlem <b>geri alınamaz!</b>",
+    await update.message.reply_text(
+        f"⚠️ Mesaj <code>{from_id}</code>'den en sona kadar <b>tüm mesajlar</b> silinecek.\n"
+        f"Bu işlem geri alınamaz!",
         parse_mode=ParseMode.HTML,
         reply_markup=kb,
     )
-    # Komut mesajını hemen sil
-    asyncio.create_task(auto_delete(ctx, chat_id, update.message.message_id, 2))
+    # Komutu hemen sil
+    asyncio.create_task(auto_delete(ctx, chat_id, update.message.message_id, 1))
 
 async def cmd_clearall(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
