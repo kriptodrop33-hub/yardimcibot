@@ -710,13 +710,13 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────────────────────
 async def handle_dm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = update.effective_user.id
-    text = update.message.text or ""
+    text = (update.message.text or update.message.caption or "").strip()
 
     if not is_admin(uid):
         return
 
-    # > ile gruba mesaj ilet
-    if text.startswith(">"):
+    # > ile gruba mesaj ilet (forward mesajlarda çalışmasın)
+    if text.startswith(">") and not update.message.forward_date and not getattr(update.message, "forward_origin", None):
         msg = text[1:].strip()
         if msg:
             try:
@@ -743,31 +743,55 @@ async def handle_dm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # act_purge_after için iletilen mesajın ID'sini otomatik çek
     if action == "act_purge_after":
-        fwd = update.message.forward_origin or None
         fwd_msg_id = None
+        fwd_err    = None
+        m = update.message
 
-        # Telegram'da "ilet" ile gönderilmiş mesajdan orijinal ID'yi al
-        if update.message.forward_from_chat and update.message.forward_from_message_id:
-            # Kanal/grup'tan iletilmiş
-            if update.message.forward_from_chat.id == GROUP_ID:
-                fwd_msg_id = update.message.forward_from_message_id
-        elif update.message.forward_date and not update.message.forward_from_chat:
-            # Kullanıcıdan iletilmiş — message_id grupta geçerli değil, uyar
-            pass
+        # Yeni API: forward_origin (python-telegram-bot 20+)
+        origin = getattr(m, "forward_origin", None)
+        if origin:
+            otype = getattr(origin, "type", None) or type(origin).__name__
+
+            # Kanal veya gruptan iletilmiş → message_id var
+            msg_id  = getattr(origin, "message_id", None)
+            chat    = getattr(origin, "chat", None)
+            chat_id = getattr(chat, "id", None) if chat else None
+
+            if msg_id:
+                if chat_id and chat_id != GROUP_ID:
+                    fwd_err = f"⚠️ Bu mesaj <b>farklı bir kanaldan/gruptan</b> iletilmiş (ID: <code>{chat_id}</code>).\nLütfen <b>hedef grubunuzdaki</b> bir mesajı iletin."
+                else:
+                    fwd_msg_id = msg_id
+            else:
+                fwd_err = "⚠️ Bu mesaj bir <b>kullanıcıdan</b> iletilmiş, gruba ait mesaj ID'si alınamıyor.\nLütfen <b>grup/kanal mesajını</b> iletin."
+
+        # Eski API fallback: forward_from_chat
+        elif getattr(m, "forward_from_chat", None) and getattr(m, "forward_from_message_id", None):
+            if m.forward_from_chat.id == GROUP_ID:
+                fwd_msg_id = m.forward_from_message_id
+            else:
+                fwd_err = f"⚠️ Bu mesaj farklı bir gruptan iletilmiş.\nLütfen hedef grubunuzdaki bir mesajı iletin."
+
+        elif getattr(m, "forward_date", None):
+            fwd_err = "⚠️ Mesaj ID'si alınamadı.\nLütfen grubunuzdaki bir mesajı bota iletin."
 
         if fwd_msg_id:
             del pending[uid]
             await _process_action(update, ctx, action, str(fwd_msg_id))
             return
-        elif update.message.forward_date:
-            # İletildi ama grubun mesajı değil
-            await update.message.reply_text(
-                "⚠️ Bu mesaj gruptan iletilmemiş görünüyor.\n"
-                "Lütfen <b>hedef gruptaki</b> bir mesajı bota iletin.",
+        elif fwd_err:
+            await m.reply_text(fwd_err, parse_mode=ParseMode.HTML)
+            return
+        elif not m.text or not m.text.strip().isdigit():
+            # Ne forward ne de sayı — pending'i koruyup tekrar sor
+            await m.reply_text(
+                "⚠️ Mesaj algılanamadı.\n\n"
+                "Grupta bir mesajı <b>İlet (Forward)</b> yapıp bota gönderin,\n"
+                "ya da mesaj ID'sini rakam olarak yazın.",
                 parse_mode=ParseMode.HTML,
             )
             return
-        # İletilmemiş, text olarak düz sayı geldiyse normal akış devam eder
+        # Düz sayı olarak yazıldıysa normal akışa devam
 
     del pending[uid]
 
@@ -1655,7 +1679,7 @@ def main():
         app.add_handler(CommandHandler(name, fn))
 
     app.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
+        filters.ChatType.PRIVATE & ~filters.COMMAND & (filters.TEXT | filters.FORWARDED),
         handle_dm,
     ))
     app.add_handler(MessageHandler(
