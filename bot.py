@@ -61,6 +61,10 @@ stats: dict[str, int] = {
 # pending[user_id] = {"action": str, "data": dict}
 pending: dict[int, dict] = {}
 
+# /select ile seçilen başlangıç mesaj ID'leri
+# select_start[chat_id] = başlangıç_mesaj_id
+select_start: dict[int, int] = {}
+
 # ──────────────────────────────────────────────────────────────
 # YARDIMCILAR
 # ──────────────────────────────────────────────────────────────
@@ -461,6 +465,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "━━━━━━━━━━━━━━━━━━\n"
             "<b>👥</b> /ban /unban /kick /mute /unmute /warn /unwarn /promote /demote\n"
             "<b>📢</b> /pin /unpin /delete /purge [n] /clearall /broadcast /poll\n"
+            "<b>📌</b> /purgefrom /select /selectend /selectcancel\n"
             "<b>⚙️</b> /lock /unlock /slowmode /setwelcome /autodelete /antiflood /newlink\n"
             "<b>🛡️</b> /addban /removeban /listban\n"
             "<b>📝</b> /savenote /note /notes /deletenote\n"
@@ -719,6 +724,38 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if data == "purgefrom_cancel":
         await q.message.delete()
         return
+
+    # ── /select aralık silme onayı ───────────────────────────
+    if data.startswith("select_confirm:"):
+        if not is_admin(uid):
+            await q.answer("⛔ Yetkin yok.", show_alert=True)
+            return
+        _, start_id, end_id = data.split(":")
+        start_id = int(start_id)
+        end_id   = int(end_id)
+        chat_id  = q.message.chat.id
+        await q.message.edit_text(
+            f"🗑️ <code>{start_id}</code> → <code>{end_id}</code> arası siliniyor...",
+            parse_mode=ParseMode.HTML,
+        )
+        deleted = await _bulk_delete(ctx, chat_id, start_id, end_id)
+        stats["deleted_messages"] += deleted
+        result_msg = await ctx.bot.send_message(
+            chat_id,
+            f"✅ Seçili aralıktan <b>{deleted}</b> mesaj silindi.",
+            parse_mode=ParseMode.HTML,
+        )
+        asyncio.create_task(auto_delete(ctx, chat_id, result_msg.message_id, 5))
+        try:
+            await q.message.delete()
+        except TelegramError:
+            pass
+        return
+
+    if data == "select_cancel":
+        await q.message.delete()
+        return
+
 
     if data == "rules":
         await q.message.reply_text(
@@ -1476,6 +1513,102 @@ async def cmd_purgefrom(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Komutu hemen sil
     asyncio.create_task(auto_delete(ctx, chat_id, update.message.message_id, 1))
 
+async def cmd_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Bir mesajı yanıtlayarak /select → başlangıç noktası seç.
+    Ardından başka bir mesajı yanıtlayarak /selectend → arası silinir."""
+    if not is_admin(update.effective_user.id): return
+    chat_id = update.effective_chat.id
+    reply = update.message.reply_to_message
+
+    if not reply:
+        m = await update.message.reply_text(
+            "📌 <b>Mesaj Seçimi</b>\n\n"
+            "Kullanım:\n"
+            "1️⃣ Silmenin <b>başlayacağı</b> mesajı yanıtla → <code>/select</code>\n"
+            "2️⃣ Silmenin <b>biteceği</b> mesajı yanıtla → <code>/selectend</code>\n\n"
+            "💡 Bu iki mesaj <b>arasındaki her şey</b> silinir.",
+            parse_mode=ParseMode.HTML,
+        )
+        asyncio.create_task(auto_delete(ctx, chat_id, update.message.message_id, 5))
+        asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 10))
+        return
+
+    select_start[chat_id] = reply.message_id
+    asyncio.create_task(auto_delete(ctx, chat_id, update.message.message_id, 3))
+    m = await ctx.bot.send_message(
+        chat_id,
+        f"✅ <b>Başlangıç noktası seçildi!</b>\n\n"
+        f"📍 Başlangıç mesaj ID: <code>{reply.message_id}</code>\n\n"
+        f"Şimdi <b>bitiş mesajını</b> yanıtlayıp <code>/selectend</code> yaz.\n"
+        f"İptal için <code>/selectcancel</code> yaz.",
+        parse_mode=ParseMode.HTML,
+    )
+    asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 15))
+
+
+async def cmd_selectend(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/select ile başlangıç seçildikten sonra bitiş noktasını belirle ve sil."""
+    if not is_admin(update.effective_user.id): return
+    chat_id = update.effective_chat.id
+    reply   = update.message.reply_to_message
+    asyncio.create_task(auto_delete(ctx, chat_id, update.message.message_id, 2))
+
+    if chat_id not in select_start:
+        m = await update.message.reply_text(
+            "❌ Önce <code>/select</code> ile başlangıç noktası seçmelisin!",
+            parse_mode=ParseMode.HTML,
+        )
+        asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 8))
+        return
+
+    if not reply:
+        m = await update.message.reply_text(
+            "❌ Bitiş noktası olarak bir mesajı yanıtlayıp <code>/selectend</code> yazmalısın!",
+            parse_mode=ParseMode.HTML,
+        )
+        asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 8))
+        return
+
+    from_id = select_start[chat_id]
+    to_id   = reply.message_id
+
+    # Küçük → büyük sırala
+    start_id = min(from_id, to_id)
+    end_id   = max(from_id, to_id)
+    count    = end_id - start_id + 1
+
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"✅ Evet, {count} mesajı sil!", callback_data=f"select_confirm:{start_id}:{end_id}"),
+        InlineKeyboardButton("❌ İptal",                      callback_data="select_cancel"),
+    ]])
+    await ctx.bot.send_message(
+        chat_id,
+        f"⚠️ <b>Seçim Tamamlandı — Onay Gerekiyor</b>\n\n"
+        f"📍 Başlangıç: <code>{start_id}</code>\n"
+        f"📍 Bitiş: <code>{end_id}</code>\n"
+        f"🗑️ Silinecek mesaj aralığı: <b>~{count} mesaj</b>\n\n"
+        f"<i>Not: Bazı mesajlar zaten silinmiş ya da mevcut olmayabilir.</i>\n\n"
+        f"Bu işlem <b>geri alınamaz!</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+    )
+    # Seçimi temizle
+    del select_start[chat_id]
+
+
+async def cmd_selectcancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Aktif seçimi iptal et."""
+    if not is_admin(update.effective_user.id): return
+    chat_id = update.effective_chat.id
+    asyncio.create_task(auto_delete(ctx, chat_id, update.message.message_id, 2))
+    if chat_id in select_start:
+        del select_start[chat_id]
+        m = await update.message.reply_text("✅ Seçim iptal edildi.")
+    else:
+        m = await update.message.reply_text("ℹ️ Aktif seçim yok.")
+    asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 5))
+
+
 async def cmd_clearall(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     mid = update.message.message_id
@@ -1713,7 +1846,10 @@ async def post_init(app: Application):
     ]
     # Grupta sadece /start görünsün
     group_cmds = [
-        BotCommand("start", "🤖 Yönetim Paneli"),
+        BotCommand("start",       "🤖 Yönetim Paneli"),
+        BotCommand("select",      "📌 Aralık Seçimi Başlat"),
+        BotCommand("selectend",   "✅ Aralık Seçimini Bitir"),
+        BotCommand("selectcancel","❌ Seçimi İptal Et"),
     ]
     await app.bot.set_my_commands(dm_cmds,    scope=BotCommandScopeAllPrivateChats())
     await app.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
@@ -1734,7 +1870,9 @@ def main():
         ("unmute",cmd_unmute),("warn",cmd_warn),("unwarn",cmd_unwarn),
         ("warnings",cmd_warnings),("promote",cmd_promote),("demote",cmd_demote),
         ("pin",cmd_pin),("unpin",cmd_unpin),("delete",cmd_delete),
-        ("purge",cmd_purge),("purgefrom",cmd_purgefrom),("clearall",cmd_clearall),("broadcast",cmd_broadcast),
+        ("purge",cmd_purge),("purgefrom",cmd_purgefrom),("clearall",cmd_clearall),
+        ("select",cmd_select),("selectend",cmd_selectend),("selectcancel",cmd_selectcancel),
+        ("broadcast",cmd_broadcast),
         ("poll",cmd_poll),("lock",cmd_lock),("unlock",cmd_unlock),
         ("slowmode",cmd_slowmode),("setwelcome",cmd_setwelcome),
         ("autodelete",cmd_autodelete),("antiflood",cmd_antiflood),
