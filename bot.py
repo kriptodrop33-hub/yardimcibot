@@ -408,7 +408,7 @@ ACTION_PROMPTS = {
     "act_pin"       : "📌 <b>Mesaj Sabitle</b>\n\nSabitlemek istediğin mesajın <b>mesaj ID'sini</b> gönder.\n\n💡 Gruba git, mesajın üzerine tıkla → Detaylar → Message ID'yi kopyala.\n\nÖrnek: <code>1234</code>",
     "act_delete"    : "🗑️ <b>Mesaj Sil</b>\n\nSilmek istediğin mesajın <b>mesaj ID'sini</b> gönder.\n\n💡 Gruba git, mesajın üzerine tıkla → Detaylar → Message ID'yi kopyala.\n\nÖrnek: <code>1234</code>",
     "act_purge_ask"  : "🧹 <b>Son N Mesajı Sil</b>\n\nKaç mesaj silmek istediğini yaz.\n📌 Maksimum: 200 mesaj\n⚠️ Bu işlem geri alınamaz!\n\nÖrnek: <code>20</code>\n\n10, 20, 50, 100 gibi bir sayı gir:",
-    "act_purge_after": "⏩ <b>Şu Mesajdan Sonrasını Sil</b>\n\nSilme işleminin başlayacağı mesajın <b>ID'sini</b> gönder.\nO mesaj <b>dahil</b>, en son mesaja kadar her şey silinecek.\n\n💡 Mesaj ID öğrenmek için:\n• Telegram'da mesaja uzun bas → İlet → Bot'a ilet\n• Ya da grubun web versiyonunda mesaj linkine bak (sondaki sayı)\n\nMesaj ID'sini yaz:",
+    "act_purge_after": "⏩ <b>Şu Mesajdan Sonrasını Sil</b>\n\nO mesajdan başlayarak en son mesaja kadar her şey silinecek.\n\n<b>Nasıl yapılır:</b>\n1️⃣ Gruба git\n2️⃣ Silmenin başlamasını istediğin mesaja uzun bas\n3️⃣ <b>İlet (Forward)</b> seçeneğine dokun\n4️⃣ Bu botu seç ve gönder\n5️⃣ Buraya geri dön — bot ID'yi otomatik algılar ✅\n\nMesajı bota ilet:",
     "act_broadcast" : "📣 <b>Gruba Duyuru Gönder</b>\n\nDuyuru metnini yaz. Mesaj resmi duyuru formatında (<b>DUYURU</b> başlığıyla) gruba gönderilecek.\n\nHTML etiketlerini kullanabilirsin: <code>&lt;b&gt;kalın&lt;/b&gt;</code>, <code>&lt;i&gt;italik&lt;/i&gt;</code>\n\nDuyuru metni:",
     "act_poll"      : "📊 <b>Anket Oluştur</b>\n\nSoru ve seçenekleri <b>| (boru çizgisi)</b> ile ayırarak gönder.\nEn az 2, en fazla 10 seçenek ekleyebilirsin.\n\nFormat: <code>Soru?|Seçenek1|Seçenek2|Seçenek3</code>\n\nÖrnek: <code>En sevdiğiniz dil hangisi?|Python|JavaScript|Go|Rust</code>",
     "act_setwelcome": "👋 <b>Karşılama Mesajı Ayarla</b>\n\nYeni karşılama metnini yaz. HTML formatı desteklenir.\n\n🔑 <b>Kullanılabilir değişkenler:</b>\n• <code>{name}</code> → Üyenin adı\n• <code>{id}</code> → Üyenin ID'si\n• <code>{group}</code> → Grubun adı\n\nÖrnek:\n<code>Merhaba {name}! Grubumuz {group}'a hoş geldin! 🎉</code>",
@@ -740,6 +740,35 @@ async def handle_dm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     action = pending[uid]["action"]
+
+    # act_purge_after için iletilen mesajın ID'sini otomatik çek
+    if action == "act_purge_after":
+        fwd = update.message.forward_origin or None
+        fwd_msg_id = None
+
+        # Telegram'da "ilet" ile gönderilmiş mesajdan orijinal ID'yi al
+        if update.message.forward_from_chat and update.message.forward_from_message_id:
+            # Kanal/grup'tan iletilmiş
+            if update.message.forward_from_chat.id == GROUP_ID:
+                fwd_msg_id = update.message.forward_from_message_id
+        elif update.message.forward_date and not update.message.forward_from_chat:
+            # Kullanıcıdan iletilmiş — message_id grupta geçerli değil, uyar
+            pass
+
+        if fwd_msg_id:
+            del pending[uid]
+            await _process_action(update, ctx, action, str(fwd_msg_id))
+            return
+        elif update.message.forward_date:
+            # İletildi ama grubun mesajı değil
+            await update.message.reply_text(
+                "⚠️ Bu mesaj gruptan iletilmemiş görünüyor.\n"
+                "Lütfen <b>hedef gruptaki</b> bir mesajı bota iletin.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        # İletilmemiş, text olarak düz sayı geldiyse normal akış devam eder
+
     del pending[uid]
 
     # ── İşlemleri yürüt ─────────────────────────────────────
