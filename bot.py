@@ -80,6 +80,35 @@ async def auto_delete(ctx, chat_id: int, msg_id: int, delay: int):
     except TelegramError:
         pass
 
+async def _bulk_delete(ctx, chat_id: int, from_id: int, to_id: int) -> int:
+    """from_id'den to_id'ye kadar (to_id dahil) tüm mesajları 100'lük batch'lerle siler.
+    Telegram delete_messages API'si max 100 ID kabul eder.
+    Döner: silinen mesaj sayısı."""
+    if from_id < to_id:
+        from_id, to_id = to_id, from_id  # her zaman from_id >= to_id
+
+    all_ids = list(range(to_id, from_id + 1))  # küçükten büyüğe
+    deleted = 0
+
+    # 100'lük batch'lere böl
+    for i in range(0, len(all_ids), 100):
+        batch = all_ids[i:i + 100]
+        try:
+            # delete_messages toplu silme (Python-telegram-bot 20+)
+            await ctx.bot.delete_messages(chat_id, batch)
+            deleted += len(batch)
+        except TelegramError:
+            # Toplu başarısız olursa tek tek dene
+            for mid in batch:
+                try:
+                    await ctx.bot.delete_message(chat_id, mid)
+                    deleted += 1
+                except TelegramError:
+                    pass
+        await asyncio.sleep(0.05)  # rate limit
+
+    return deleted
+
 def back_btn(target="main") -> InlineKeyboardMarkup:
     labels = {
         "main"    : "🏠 Ana Menü",
@@ -187,6 +216,8 @@ def msgs_menu() -> tuple[str, InlineKeyboardMarkup]:
         "Kaç mesaj sileceğini girdikten sonra <b>onay butonu</b> gelir.\n"
         "💣 <b>Son 100 Mesajı Sil</b> — Grubun son 100 mesajını tek seferde temizler. "
         "Onay gerektirir, geri alınamaz!\n"
+        "⏩ <b>Şu Mesajdan Sonrasını Sil</b> — Gruba git, bir mesajı <b>ilet (forward)</b> "
+        "ya da mesaj ID'sini yaz. O mesajdan sonra gelen her şey silinir.\n"
         "📣 <b>Duyuru Gönder</b> — Gruba resmi formatta bir duyuru mesajı gönderir.\n"
         "📊 <b>Anket Oluştur</b> — Grup içinde interaktif bir anket başlatır. "
         "Kullanım: <code>Soru?|Seçenek1|Seçenek2|Seçenek3</code>\n\n"
@@ -203,6 +234,7 @@ def msgs_menu() -> tuple[str, InlineKeyboardMarkup]:
         ],
         [
             InlineKeyboardButton("💣 Son 100 Mesajı Sil", callback_data="act_clearall"),
+            InlineKeyboardButton("⏩ Mesajdan Sonrasını Sil", callback_data="act_purge_after"),
         ],
         [
             InlineKeyboardButton("📣 Duyuru Gönder",      callback_data="act_broadcast"),
@@ -375,7 +407,8 @@ ACTION_PROMPTS = {
     "act_info"      : "👤 <b>Kullanıcı Bilgisi</b>\n\nBilgilerini görmek istediğin kullanıcının <b>Telegram ID'sini</b> gönder.\n\nÖrnek: <code>123456789</code>",
     "act_pin"       : "📌 <b>Mesaj Sabitle</b>\n\nSabitlemek istediğin mesajın <b>mesaj ID'sini</b> gönder.\n\n💡 Gruba git, mesajın üzerine tıkla → Detaylar → Message ID'yi kopyala.\n\nÖrnek: <code>1234</code>",
     "act_delete"    : "🗑️ <b>Mesaj Sil</b>\n\nSilmek istediğin mesajın <b>mesaj ID'sini</b> gönder.\n\n💡 Gruba git, mesajın üzerine tıkla → Detaylar → Message ID'yi kopyala.\n\nÖrnek: <code>1234</code>",
-    "act_purge_ask" : "🧹 <b>Son N Mesajı Sil</b>\n\nKaç mesaj silmek istediğini yaz.\n📌 Maksimum: 200 mesaj\n⚠️ Bu işlem geri alınamaz!\n\nÖrnek: <code>20</code>\n\n10, 20, 50, 100 gibi bir sayı gir:",
+    "act_purge_ask"  : "🧹 <b>Son N Mesajı Sil</b>\n\nKaç mesaj silmek istediğini yaz.\n📌 Maksimum: 200 mesaj\n⚠️ Bu işlem geri alınamaz!\n\nÖrnek: <code>20</code>\n\n10, 20, 50, 100 gibi bir sayı gir:",
+    "act_purge_after": "⏩ <b>Şu Mesajdan Sonrasını Sil</b>\n\nSilme işleminin başlayacağı mesajın <b>ID'sini</b> gönder.\nO mesaj <b>dahil</b>, en son mesaja kadar her şey silinecek.\n\n💡 Mesaj ID öğrenmek için:\n• Telegram'da mesaja uzun bas → İlet → Bot'a ilet\n• Ya da grubun web versiyonunda mesaj linkine bak (sondaki sayı)\n\nMesaj ID'sini yaz:",
     "act_broadcast" : "📣 <b>Gruba Duyuru Gönder</b>\n\nDuyuru metnini yaz. Mesaj resmi duyuru formatında (<b>DUYURU</b> başlığıyla) gruba gönderilecek.\n\nHTML etiketlerini kullanabilirsin: <code>&lt;b&gt;kalın&lt;/b&gt;</code>, <code>&lt;i&gt;italik&lt;/i&gt;</code>\n\nDuyuru metni:",
     "act_poll"      : "📊 <b>Anket Oluştur</b>\n\nSoru ve seçenekleri <b>| (boru çizgisi)</b> ile ayırarak gönder.\nEn az 2, en fazla 10 seçenek ekleyebilirsin.\n\nFormat: <code>Soru?|Seçenek1|Seçenek2|Seçenek3</code>\n\nÖrnek: <code>En sevdiğiniz dil hangisi?|Python|JavaScript|Go|Rust</code>",
     "act_setwelcome": "👋 <b>Karşılama Mesajı Ayarla</b>\n\nYeni karşılama metnini yaz. HTML formatı desteklenir.\n\n🔑 <b>Kullanılabilir değişkenler:</b>\n• <code>{name}</code> → Üyenin adı\n• <code>{id}</code> → Üyenin ID'si\n• <code>{group}</code> → Grubun adı\n\nÖrnek:\n<code>Merhaba {name}! Grubumuz {group}'a hoş geldin! 🎉</code>",
@@ -396,11 +429,20 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
 
     if chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
-        if is_admin(user.id):
-            await update.message.reply_text(
-                "🤖 Bot aktif! Tüm komutlar için /help — Görsel panel için DM'den /start yaz.",
-                parse_mode=ParseMode.HTML,
-            )
+        # Sadece admin kullanabilir, diğerleri sessizce görmezden gel
+        if not is_admin(user.id):
+            try:
+                await update.message.delete()  # komutu sil ki kalabalık olmasın
+            except TelegramError:
+                pass
+            return
+        # Admin grupta /start yazdıysa DM'e yönlendir
+        m = await update.message.reply_text(
+            "🤖 Yönetim paneli için DM'e geç 👉 @me",
+            parse_mode=ParseMode.HTML,
+        )
+        asyncio.create_task(auto_delete(ctx, chat.id, m.message_id, 8))
+        asyncio.create_task(auto_delete(ctx, chat.id, update.message.message_id, 8))
         return
 
     if not is_admin(user.id):
@@ -594,14 +636,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except TelegramError as e:
             await q.message.edit_text(f"❌ Grup mesaj ID alınamadı: {e}")
             return
-        deleted = 0
-        for i in range(1, 102):
-            try:
-                await ctx.bot.delete_message(GROUP_ID, last_id - i)
-                deleted += 1
-                await asyncio.sleep(0.04)
-            except TelegramError:
-                pass
+        deleted = await _bulk_delete(ctx, GROUP_ID, last_id - 1, last_id - 100)
         stats["deleted_messages"] += deleted
         await q.message.edit_text(
             f"✅ Tamamlandı! <b>{deleted}</b> mesaj silindi.\n<i>(Erişilemeyen mesajlar atlandı)</i>",
@@ -609,11 +644,11 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Purge onay butonları
+    # Purge N mesaj onay
     if data.startswith("purge_confirm:"):
-        n = int(data.split(":")[1])
+        parts = data.split(":")
+        n = int(parts[1])
         await q.message.edit_text(f"🧹 Son <b>{n}</b> mesaj siliniyor...", parse_mode=ParseMode.HTML)
-        # Gruba geçici sentinel mesajı gönder → son mesaj ID'sini öğren → sil
         try:
             sentinel = await ctx.bot.send_message(GROUP_ID, "🧹")
             last_id  = sentinel.message_id
@@ -621,17 +656,29 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except TelegramError as e:
             await q.message.edit_text(f"❌ Grup mesaj ID alınamadı: {e}")
             return
-        deleted = 0
-        for i in range(1, n + 2):
-            try:
-                await ctx.bot.delete_message(GROUP_ID, last_id - i)
-                deleted += 1
-                await asyncio.sleep(0.04)
-            except TelegramError:
-                pass
+        deleted = await _bulk_delete(ctx, GROUP_ID, last_id - 1, last_id - n)
         stats["deleted_messages"] += deleted
         await q.message.edit_text(
             f"✅ <b>{deleted}</b> mesaj silindi.\n<i>(Bazı mesajlar zaten silinmiş veya erişilemez olabilir)</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Purge after (şu mesajdan sonrasını sil) onay
+    if data.startswith("purge_after_confirm:"):
+        from_id = int(data.split(":")[1])
+        await q.message.edit_text(f"⏩ Mesaj <code>{from_id}</code>'den itibaren siliniyor...", parse_mode=ParseMode.HTML)
+        try:
+            sentinel = await ctx.bot.send_message(GROUP_ID, "🧹")
+            last_id  = sentinel.message_id
+            await ctx.bot.delete_message(GROUP_ID, last_id)
+        except TelegramError as e:
+            await q.message.edit_text(f"❌ Grup mesaj ID alınamadı: {e}")
+            return
+        deleted = await _bulk_delete(ctx, GROUP_ID, last_id - 1, from_id)
+        stats["deleted_messages"] += deleted
+        await q.message.edit_text(
+            f"✅ <b>{deleted}</b> mesaj silindi.\n<i>(Mesaj {from_id}'den en sona kadar)</i>",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -965,16 +1012,41 @@ async def _process_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action
             await msg.reply_text("❌ Geçerli bir <b>sayı</b> gir.", parse_mode=ParseMode.HTML)
             return
         n = min(int(text.strip()), 200)
-        # Referans mesaj ID olarak grubun son mesajını tahmin et
-        # Kullanıcıya onay sor
-        ref_id = msg.message_id
         kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton(f"✅ Evet, {n} mesajı sil!", callback_data=f"purge_confirm:{n}:{ref_id}"),
+            InlineKeyboardButton(f"✅ Evet, {n} mesajı sil!", callback_data=f"purge_confirm:{n}"),
             InlineKeyboardButton("❌ İptal", callback_data="menu_msgs"),
         ]])
         await msg.reply_text(
             f"⚠️ <b>Onay Gerekiyor</b>\n\n"
             f"Grubun son <b>{n} mesajını</b> silmek üzeresin.\n"
+            f"Bu işlem <b>geri alınamaz!</b>\n\nDevam etmek istiyor musun?",
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb,
+        )
+
+    # ── PURGE AFTER ─────────────────────────────────────────
+    elif action == "act_purge_after":
+        text_clean = text.strip()
+        # Forward edilmiş mesaj ID veya düz sayı kabul et
+        if not text_clean.isdigit():
+            await msg.reply_text(
+                "❌ Geçerli bir <b>mesaj ID'si</b> gir.\n"
+                "Örnek: <code>12345</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        from_id = int(text_clean)
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                f"✅ Evet, {from_id}'den itibaren sil!",
+                callback_data=f"purge_after_confirm:{from_id}"
+            ),
+            InlineKeyboardButton("❌ İptal", callback_data="menu_msgs"),
+        ]])
+        await msg.reply_text(
+            f"⚠️ <b>Onay Gerekiyor</b>\n\n"
+            f"Mesaj <code>{from_id}</code>'den başlayarak en son mesaja kadar\n"
+            f"<b>tüm mesajlar silinecek.</b>\n\n"
             f"Bu işlem <b>geri alınamaz!</b>\n\nDevam etmek istiyor musun?",
             parse_mode=ParseMode.HTML,
             reply_markup=kb,
@@ -1272,21 +1344,13 @@ async def cmd_purge(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Kullanım: /purge [n]"); return
     n = min(int(ctx.args[0]), 200)
     chat_id = update.effective_chat.id
-    # Grupta sentinel gönder → gerçek son ID'yi al
     try:
         sentinel = await ctx.bot.send_message(chat_id, "🧹")
         last_id  = sentinel.message_id
         await ctx.bot.delete_message(chat_id, last_id)
     except TelegramError as e:
         await update.message.reply_text(f"❌ Hata: {e}"); return
-    deleted = 0
-    for i in range(1, n + 2):
-        try:
-            await ctx.bot.delete_message(chat_id, last_id - i)
-            deleted += 1
-            await asyncio.sleep(0.04)
-        except TelegramError:
-            pass
+    deleted = await _bulk_delete(ctx, chat_id, last_id - 1, last_id - n)
     stats["deleted_messages"] += deleted
     m = await ctx.bot.send_message(chat_id, f"🗑️ {deleted} mesaj silindi.")
     asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 5))
@@ -1516,6 +1580,7 @@ async def error_handler(update: object, ctx: ContextTypes.DEFAULT_TYPE):
 # POST INIT — Komut listeleri
 # ──────────────────────────────────────────────────────────────
 async def post_init(app: Application):
+    # DM'de tüm komutlar görünsün (sadece admin DM açabilir zaten)
     dm_cmds = [
         BotCommand("start",       "🤖 Yönetim Panelini Aç"),
         BotCommand("help",        "📋 Tüm Komutları Listele"),
@@ -1525,44 +1590,9 @@ async def post_init(app: Application):
         BotCommand("notes",       "📝 Kayıtlı Notları Listele"),
         BotCommand("broadcast",   "📣 Gruba Duyuru Gönder"),
     ]
+    # Grupta sadece /start görünsün
     group_cmds = [
-        BotCommand("ban",         "🔨 Kullanıcıyı Banla"),
-        BotCommand("unban",       "✅ Kullanıcının Banını Kaldır"),
-        BotCommand("kick",        "👢 Kullanıcıyı Gruptan At"),
-        BotCommand("mute",        "🔇 Kullanıcıyı Sustur"),
-        BotCommand("unmute",      "🔊 Kullanıcının Sesini Aç"),
-        BotCommand("warn",        "⚠️ Kullanıcıyı Uyar (3te ban)"),
-        BotCommand("unwarn",      "🔄 Uyarıları Sıfırla"),
-        BotCommand("warnings",    "📊 Uyarı Sayısını Sorgula"),
-        BotCommand("promote",     "⬆️ Admin Yap"),
-        BotCommand("demote",      "⬇️ Adminden Al"),
-        BotCommand("pin",         "📌 Mesajı Sabitle"),
-        BotCommand("unpin",       "📌 Sabitlemeyi Kaldır"),
-        BotCommand("delete",      "🗑️ Mesajı Sil"),
-        BotCommand("purge",       "🧹 Son N Mesajı Sil"),
-        BotCommand("clearall",    "💣 Son 100 Mesajı Sil"),
-        BotCommand("broadcast",   "📣 Gruba Resmi Duyuru Gönder"),
-        BotCommand("poll",        "📊 Anket Oluştur"),
-        BotCommand("lock",        "🔒 Grubu Kilitle"),
-        BotCommand("unlock",      "🔓 Grup Kilidini Aç"),
-        BotCommand("slowmode",    "🐌 Yavaş Mod Ayarla"),
-        BotCommand("setwelcome",  "👋 Karşılama Mesajı Ayarla"),
-        BotCommand("autodelete",  "⏱️ Otomatik Mesaj Silme"),
-        BotCommand("antiflood",   "🌊 Flood Korumasını Aç/Kapat"),
-        BotCommand("addban",      "🚫 Yasaklı Kelime Ekle"),
-        BotCommand("removeban",   "✅ Yasaklı Kelime Kaldır"),
-        BotCommand("listban",     "📋 Yasaklı Kelimeleri Listele"),
-        BotCommand("newlink",     "🔗 Yeni Davet Linki Oluştur"),
-        BotCommand("savenote",    "💾 Not Kaydet"),
-        BotCommand("note",        "📖 Notu Göster"),
-        BotCommand("notes",       "📋 Tüm Notları Listele"),
-        BotCommand("deletenote",  "🗑️ Notu Sil"),
-        BotCommand("info",        "👤 Kullanıcı Bilgilerini Gör"),
-        BotCommand("groupinfo",   "🏘️ Grup Bilgilerini Gör"),
-        BotCommand("membercount", "👥 Üye Sayısını Gör"),
-        BotCommand("stats",       "📈 Bot İstatistiklerini Gör"),
-        BotCommand("id",          "🆔 Kullanıcı ve Chat ID Göster"),
-        BotCommand("help",        "📋 Tüm Komutları Listele"),
+        BotCommand("start", "🤖 Yönetim Paneli"),
     ]
     await app.bot.set_my_commands(dm_cmds,    scope=BotCommandScopeAllPrivateChats())
     await app.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
