@@ -216,8 +216,9 @@ def msgs_menu() -> tuple[str, InlineKeyboardMarkup]:
         "Kaç mesaj sileceğini girdikten sonra <b>onay butonu</b> gelir.\n"
         "💣 <b>Son 100 Mesajı Sil</b> — Grubun son 100 mesajını tek seferde temizler. "
         "Onay gerektirir, geri alınamaz!\n"
-        "⏩ <b>Şu Mesajdan Sonrasını Sil</b> — Gruba git, bir mesajı <b>ilet (forward)</b> "
-        "ya da mesaj ID'sini yaz. O mesajdan sonra gelen her şey silinir.\n"
+        "⏩ <b>Şu Mesajdan Sonrasını Sil</b> — Grupta bir mesajı <b>yanıtlayıp</b> "
+        "<code>/purgefrom</code> yaz. O mesajdan en sona kadar her şey silinir. "
+        "Panelden de başlatabilirsin — bot seni grupta reply yapmaya yönlendirir.\n"
         "📣 <b>Duyuru Gönder</b> — Gruba resmi formatta bir duyuru mesajı gönderir.\n"
         "📊 <b>Anket Oluştur</b> — Grup içinde interaktif bir anket başlatır. "
         "Kullanım: <code>Soru?|Seçenek1|Seçenek2|Seçenek3</code>\n\n"
@@ -408,7 +409,7 @@ ACTION_PROMPTS = {
     "act_pin"       : "📌 <b>Mesaj Sabitle</b>\n\nSabitlemek istediğin mesajın <b>mesaj ID'sini</b> gönder.\n\n💡 Gruba git, mesajın üzerine tıkla → Detaylar → Message ID'yi kopyala.\n\nÖrnek: <code>1234</code>",
     "act_delete"    : "🗑️ <b>Mesaj Sil</b>\n\nSilmek istediğin mesajın <b>mesaj ID'sini</b> gönder.\n\n💡 Gruba git, mesajın üzerine tıkla → Detaylar → Message ID'yi kopyala.\n\nÖrnek: <code>1234</code>",
     "act_purge_ask"  : "🧹 <b>Son N Mesajı Sil</b>\n\nKaç mesaj silmek istediğini yaz.\n📌 Maksimum: 200 mesaj\n⚠️ Bu işlem geri alınamaz!\n\nÖrnek: <code>20</code>\n\n10, 20, 50, 100 gibi bir sayı gir:",
-    "act_purge_after": "⏩ <b>Şu Mesajdan Sonrasını Sil</b>\n\nO mesajdan başlayarak en son mesaja kadar her şey silinecek.\n\n<b>Nasıl yapılır:</b>\n1️⃣ Gruба git\n2️⃣ Silmenin başlamasını istediğin mesaja uzun bas\n3️⃣ <b>İlet (Forward)</b> seçeneğine dokun\n4️⃣ Bu botu seç ve gönder\n5️⃣ Buraya geri dön — bot ID'yi otomatik algılar ✅\n\nMesajı bota ilet:",
+    "act_purge_after": "⏩ <b>Şu Mesajdan Sonrasını Sil</b>\n\nGruba git, silmenin başlamasını istediğin mesajı <b>yanıtla (reply)</b> ve şunu yaz:\n\n<code>/purgefrom</code>\n\nBot onay isteyecek, onayladıktan sonra o mesajdan en sona kadar her şey silinecek.",
     "act_broadcast" : "📣 <b>Gruba Duyuru Gönder</b>\n\nDuyuru metnini yaz. Mesaj resmi duyuru formatında (<b>DUYURU</b> başlığıyla) gruba gönderilecek.\n\nHTML etiketlerini kullanabilirsin: <code>&lt;b&gt;kalın&lt;/b&gt;</code>, <code>&lt;i&gt;italik&lt;/i&gt;</code>\n\nDuyuru metni:",
     "act_poll"      : "📊 <b>Anket Oluştur</b>\n\nSoru ve seçenekleri <b>| (boru çizgisi)</b> ile ayırarak gönder.\nEn az 2, en fazla 10 seçenek ekleyebilirsin.\n\nFormat: <code>Soru?|Seçenek1|Seçenek2|Seçenek3</code>\n\nÖrnek: <code>En sevdiğiniz dil hangisi?|Python|JavaScript|Go|Rust</code>",
     "act_setwelcome": "👋 <b>Karşılama Mesajı Ayarla</b>\n\nYeni karşılama metnini yaz. HTML formatı desteklenir.\n\n🔑 <b>Kullanılabilir değişkenler:</b>\n• <code>{name}</code> → Üyenin adı\n• <code>{id}</code> → Üyenin ID'si\n• <code>{group}</code> → Grubun adı\n\nÖrnek:\n<code>Merhaba {name}! Grubumuz {group}'a hoş geldin! 🎉</code>",
@@ -681,6 +682,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"✅ <b>{deleted}</b> mesaj silindi.\n<i>(Mesaj {from_id}'den en sona kadar)</i>",
             parse_mode=ParseMode.HTML,
         )
+        return
+
+    if data == "purgefrom_cancel":
+        await q.message.delete()
         return
 
     if data == "rules":
@@ -1408,6 +1413,42 @@ async def cmd_purge(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     m = await ctx.bot.send_message(chat_id, f"🗑️ {deleted} mesaj silindi.")
     asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 5))
 
+async def cmd_purgefrom(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Grupta bir mesajı reply'layıp /purgefrom yaz → o mesajdan itibaren sil."""
+    if not is_admin(update.effective_user.id): return
+    chat_id = update.effective_chat.id
+
+    reply = update.message.reply_to_message
+    if not reply:
+        m = await update.message.reply_text(
+            "ℹ️ Kullanım: Silmenin başlamasını istediğin mesajı <b>yanıtla</b> ve /purgefrom yaz.",
+            parse_mode=ParseMode.HTML,
+        )
+        asyncio.create_task(auto_delete(ctx, chat_id, update.message.message_id, 5))
+        asyncio.create_task(auto_delete(ctx, chat_id, m.message_id, 5))
+        return
+
+    from_id = reply.message_id
+
+    # Onay mesajı gönder
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            f"✅ Evet, {from_id}'den itibaren sil!",
+            callback_data=f"purge_after_confirm:{from_id}"
+        ),
+        InlineKeyboardButton("❌ İptal", callback_data="purgefrom_cancel"),
+    ]])
+    m = await update.message.reply_text(
+        f"⚠️ <b>Onay Gerekiyor</b>\n\n"
+        f"Mesaj <code>{from_id}</code>'den başlayarak en son mesaja kadar\n"
+        f"<b>tüm mesajlar silinecek.</b>\n\n"
+        f"Bu işlem <b>geri alınamaz!</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+    )
+    # Komut mesajını hemen sil
+    asyncio.create_task(auto_delete(ctx, chat_id, update.message.message_id, 2))
+
 async def cmd_clearall(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     mid = update.message.message_id
@@ -1666,7 +1707,7 @@ def main():
         ("unmute",cmd_unmute),("warn",cmd_warn),("unwarn",cmd_unwarn),
         ("warnings",cmd_warnings),("promote",cmd_promote),("demote",cmd_demote),
         ("pin",cmd_pin),("unpin",cmd_unpin),("delete",cmd_delete),
-        ("purge",cmd_purge),("clearall",cmd_clearall),("broadcast",cmd_broadcast),
+        ("purge",cmd_purge),("purgefrom",cmd_purgefrom),("clearall",cmd_clearall),("broadcast",cmd_broadcast),
         ("poll",cmd_poll),("lock",cmd_lock),("unlock",cmd_unlock),
         ("slowmode",cmd_slowmode),("setwelcome",cmd_setwelcome),
         ("autodelete",cmd_autodelete),("antiflood",cmd_antiflood),
