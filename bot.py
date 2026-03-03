@@ -12,6 +12,8 @@ import logging
 import os
 import asyncio
 from datetime import datetime, timedelta
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from telegram import (
     Update, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup,
     BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats,
@@ -43,12 +45,28 @@ warnings_db    : dict[int, int]      = {}   # user_id → uyarı sayısı
 muted_users    : dict[int, datetime] = {}
 banned_words   : list[str]           = []
 notes          : dict[str, str]      = {}
-welcome_msg    : str  = "👋 Merhaba {name}! <b>{group}</b> grubuna hoş geldin!\n\nLütfen grup kurallarını oku ve saygılı ol. İyi eğlenceler! 🎉"
+welcome_msg    : str  = "🎉 <b>KriptoDrop TR</b> Kanalımıza Hoş Geldiniz, {name}! 🎁\n\n🚀 Güncel airdroplardan anında haberdar olmak için\n\n🔔 <b>KriptoDrop TR DUYURU</b> 📢 Kanalımıza katılmayı ve kanal bildirimlerini açmayı unutmayın!\n\n\U0001F48E Bol kazançlar dileriz!"
 auto_delete_sec: int  = 0
 antiflood_on   : bool = True
 antiflood_buf  : dict[int, list]     = {}
 group_locked   : bool = False
 slowmode_sec   : int  = 0
+
+# ── Davet Takibi ──────────────────────────────────────────────
+# invite_tracker[user_id] = {"name": str, "count": int}
+invite_tracker : dict[int, dict]     = {}
+
+# ── Zamanlı Duyuru ────────────────────────────────────────────
+scheduled_msg_text : str  = (
+    "📢 <b>KriptoDrop TR — Günlük Hatırlatma</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🚀 Bugünün güncel airdroplarını kaçırmamak için\n"
+    "🔔 <b>KriptoDrop TR DUYURU</b> kanalımıza abone olun ve bildirimleri açın!\n\n"
+    "\U0001F48E Bol kazançlar dileriz!"
+)
+scheduled_msg_hour  : int  = 9    # UTC saat (09:00 UTC = Türkiye 12:00 yaz saati)
+scheduled_msg_min   : int  = 0
+scheduled_msg_on    : bool = True  # Zamanlı duyuru aktif mi
 
 stats: dict[str, int] = {
     "total_messages"  : 0,
@@ -156,6 +174,10 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("📣 Gruba Duyuru Gönder", callback_data="menu_broadcast"),
+        ],
+        [
+            InlineKeyboardButton("🏆 Davet Liderlik Tablosu", callback_data="menu_invites"),
+            InlineKeyboardButton("⏰ Zamanlı Duyuru",         callback_data="menu_scheduled"),
         ],
     ])
 
@@ -395,6 +417,65 @@ def info_menu() -> tuple[str, InlineKeyboardMarkup]:
     ])
     return text, kb
 
+def invites_menu() -> tuple[str, InlineKeyboardMarkup]:
+    if not invite_tracker:
+        board = "📭 Henüz davet verisi yok.\n\nBir üye gruba davet linki ile katıldığında burada görünür."
+    else:
+        sorted_inv = sorted(invite_tracker.items(), key=lambda x: x[1]["count"], reverse=True)
+        medals = ["🥇", "🥈", "🥉"]
+        lines  = []
+        for i, (uid, data) in enumerate(sorted_inv[:20]):
+            medal = medals[i] if i < 3 else f"{i+1}."
+            lines.append(f"{medal} <a href='tg://user?id={uid}'>{data['name']}</a> — <b>{data['count']}</b> davet")
+        board = "\n".join(lines)
+    text = (
+        "🏆 <b>Davet Liderlik Tablosu</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Bu bölümden kimin kaç üye davet ettiğini görebilirsin.\n"
+        "Bot, yeni üye katılımlarını otomatik takip eder.\n\n"
+        f"{board}\n\n"
+        "💡 Tabloyu sıfırlamak için Sıfırla butonuna bas."
+    )
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 Tabloyu Yenile",        callback_data="menu_invites"),
+            InlineKeyboardButton("🗑️ Tabloyu Sıfırla",      callback_data="invite_reset"),
+        ],
+        [
+            InlineKeyboardButton("📤 Tabloya Gruba Gönder",  callback_data="invite_send_group"),
+        ],
+        [InlineKeyboardButton("🏠 Ana Menü", callback_data="menu_main")],
+    ])
+    return text, kb
+
+def scheduled_menu() -> tuple[str, InlineKeyboardMarkup]:
+    status_icon = "✅ Aktif" if scheduled_msg_on else "❌ Pasif"
+    text = (
+        "⏰ <b>Zamanlı Duyuru Ayarları</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Her gün belirlediğin saatte gruba otomatik duyuru gönderilir.\n"
+        "Duyuru, karşılama mesajıyla aynı 3 butonla gönderilir.\n\n"
+        f"📅 <b>Mevcut Ayarlar:</b>\n"
+        f"🕐 Gönderim saati (UTC): <b>{scheduled_msg_hour:02d}:{scheduled_msg_min:02d}</b>\n"
+        f"   (Türkiye saati ≈ {(scheduled_msg_hour + 3) % 24:02d}:{scheduled_msg_min:02d})\n"
+        f"📌 Durum: <b>{status_icon}</b>\n\n"
+        f"📝 <b>Duyuru Metni Önizleme:</b>\n"
+        f"<i>{scheduled_msg_text[:250]}{'...' if len(scheduled_msg_text) > 250 else ''}</i>"
+    )
+    toggle_label = "⏸️ Duyuruyu Durdur" if scheduled_msg_on else "▶️ Duyuruyu Başlat"
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✏️ Metni Düzenle",     callback_data="act_set_scheduled_text"),
+            InlineKeyboardButton("🕐 Saati Değiştir",    callback_data="act_set_scheduled_time"),
+        ],
+        [
+            InlineKeyboardButton(toggle_label,           callback_data="scheduled_toggle"),
+            InlineKeyboardButton("📤 Şimdi Gönder",      callback_data="scheduled_send_now"),
+        ],
+        [InlineKeyboardButton("🏠 Ana Menü", callback_data="menu_main")],
+    ])
+    return text, kb
+
 # ──────────────────────────────────────────────────────────────
 # ACTİON AÇIKLAMALARI (kullanıcıya bilgi ister)
 # ──────────────────────────────────────────────────────────────
@@ -424,6 +505,23 @@ ACTION_PROMPTS = {
     "act_savenote"  : "💾 <b>Not Kaydet</b>\n\nÖnce not adını, sonra bir boşluk bırakıp içeriğini yaz.\n\nFormat: <code>notadı Not içeriği buraya</code>\n\nÖrnek: <code>kurallar 1. Saygılı ol 2. Spam yapma 3. Reklam yasak</code>",
     "act_sendnote"  : "📖 <b>Notu Gruba Gönder</b>\n\nGruba göndermek istediğin notun adını yaz.\n\nMevcut notlar: " + (", ".join(f"<code>#{k}</code>" for k in list(notes.keys())[:15]) or "Henüz not yok"),
     "act_deletenote": "🗑️ <b>Not Sil</b>\n\nSilmek istediğin notun adını yaz.\n\nMevcut notlar: " + (", ".join(f"<code>#{k}</code>" for k in list(notes.keys())[:15]) or "Henüz not yok"),
+    "act_set_scheduled_text": (
+        "✏️ <b>Zamanlı Duyuru Metnini Düzenle</b>\n\n"
+        "Yeni duyuru metnini yaz. HTML formatı desteklenir.\n"
+        "<code>&lt;b&gt;kalın&lt;/b&gt;</code>, <code>&lt;i&gt;italik&lt;/i&gt;</code>\n\n"
+        "⚠️ Duyuru butonları (Duyuru Kanalı, Kurallar, SSS) otomatik eklenir, yazmana gerek yok.\n\n"
+        "Yeni metin:"
+    ),
+    "act_set_scheduled_time": (
+        "🕐 <b>Zamanlı Duyuru Saatini Değiştir</b>\n\n"
+        "Duyurunun gönderileceği saati <b>UTC</b> olarak gir.\n"
+        "Format: <code>SS:DD</code>\n\n"
+        "Örnekler:\n"
+        "• <code>06:00</code> → Türkiye 09:00 kış / 09:00 yaz\n"
+        "• <code>09:00</code> → Türkiye 12:00 yaz\n"
+        "• <code>15:00</code> → Türkiye 18:00 yaz\n\n"
+        "Saat (UTC olarak SS:DD):"
+    ),
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -533,7 +631,60 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Anlık işlemler (girdi gerektirmez) ──────────────────
+    if data == "menu_invites":
+        txt, kb = invites_menu()
+        await q.message.edit_text(txt, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if data == "invite_reset":
+        invite_tracker.clear()
+        await q.answer("✅ Davet tablosu sıfırlandı!", show_alert=True)
+        txt, kb = invites_menu()
+        await q.message.edit_text(txt, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if data == "invite_send_group":
+        if not invite_tracker:
+            await q.answer("📭 Gösterilecek davet verisi yok.", show_alert=True)
+            return
+        sorted_inv = sorted(invite_tracker.items(), key=lambda x: x[1]["count"], reverse=True)
+        medals = ["🥇", "🥈", "🥉"]
+        lines  = []
+        for i, (iuid, idata) in enumerate(sorted_inv[:20]):
+            medal = medals[i] if i < 3 else f"{i+1}."
+            lines.append(f"{medal} <a href='tg://user?id={iuid}'>{idata['name']}</a> — <b>{idata['count']}</b> davet")
+        board_text = "\n".join(lines)
+        try:
+            await ctx.bot.send_message(
+                GROUP_ID,
+                f"🏆 <b>Davet Liderlik Tablosu</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{board_text}",
+                parse_mode=ParseMode.HTML,
+            )
+            await q.answer("✅ Tablo gruba gönderildi!", show_alert=True)
+        except TelegramError as e:
+            await q.answer(f"❌ Hata: {e}", show_alert=True)
+        return
+
+    if data == "menu_scheduled":
+        txt, kb = scheduled_menu()
+        await q.message.edit_text(txt, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if data == "scheduled_toggle":
+        global scheduled_msg_on
+        scheduled_msg_on = not scheduled_msg_on
+        status = "▶️ Başlatıldı" if scheduled_msg_on else "⏸️ Durduruldu"
+        await q.answer(f"Zamanlı duyuru {status}", show_alert=True)
+        txt, kb = scheduled_menu()
+        await q.message.edit_text(txt, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if data == "scheduled_send_now":
+        await _send_scheduled_msg(ctx)
+        await q.answer("✅ Duyuru şimdi gönderildi!", show_alert=True)
+        return
+
+
     if data == "act_unpin":
         await _exec_unpin(q.message, ctx)
         return
@@ -1220,7 +1371,42 @@ async def _process_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action
             parse_mode=ParseMode.HTML,
         )
 
-    # ── SLOWMODE ────────────────────────────────────────────
+    # ── ZAMANLANAN DUYURU METNİ ─────────────────────────────
+    elif action == "act_set_scheduled_text":
+        global scheduled_msg_text
+        scheduled_msg_text = text
+        await msg.reply_text(
+            f"✅ <b>Zamanlı Duyuru Metni Güncellendi</b>\n\n"
+            f"Yeni metin:\n<i>{scheduled_msg_text[:300]}</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏰ Duyuru Ayarlarına Dön", callback_data="menu_scheduled")]]),
+        )
+
+    # ── ZAMANLANAN DUYURU SAATİ ─────────────────────────────
+    elif action == "act_set_scheduled_time":
+        global scheduled_msg_hour, scheduled_msg_min
+        import re as _re
+        m_obj = _re.match(r"^(\d{1,2}):(\d{2})$", text.strip())
+        if not m_obj:
+            await msg.reply_text("❌ Geçersiz format. Örnek: <code>09:00</code>", parse_mode=ParseMode.HTML)
+            return
+        h, mi = int(m_obj.group(1)), int(m_obj.group(2))
+        if not (0 <= h <= 23 and 0 <= mi <= 59):
+            await msg.reply_text("❌ Geçersiz saat. Örnek: <code>09:00</code>", parse_mode=ParseMode.HTML)
+            return
+        scheduled_msg_hour = h
+        scheduled_msg_min  = mi
+        # Scheduler'ı yeniden ayarla
+        _reschedule(ctx)
+        await msg.reply_text(
+            f"✅ <b>Zamanlı Duyuru Saati Güncellendi</b>\n\n"
+            f"🕐 Yeni saat (UTC): <b>{h:02d}:{mi:02d}</b>\n"
+            f"🇹🇷 Türkiye ≈ <b>{(h+3)%24:02d}:{mi:02d}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏰ Duyuru Ayarlarına Dön", callback_data="menu_scheduled")]]),
+        )
+
+
     elif action == "act_slowmode":
         global slowmode_sec
         if not text.strip().isdigit():
@@ -1728,6 +1914,23 @@ async def cmd_membercount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     count = await ctx.bot.get_chat_member_count(GROUP_ID)
     await update.message.reply_text(f"👥 Üye sayısı: <b>{count}</b>", parse_mode=ParseMode.HTML)
 
+async def cmd_topdavetci(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Davet liderlik tablosunu gruba veya DM'e gönderir."""
+    if not invite_tracker:
+        await update.message.reply_text("📭 Henüz davet verisi yok.", parse_mode=ParseMode.HTML)
+        return
+    sorted_inv = sorted(invite_tracker.items(), key=lambda x: x[1]["count"], reverse=True)
+    medals = ["🥇", "🥈", "🥉"]
+    lines  = []
+    for i, (iuid, idata) in enumerate(sorted_inv[:20]):
+        medal = medals[i] if i < 3 else f"{i+1}."
+        lines.append(f"{medal} <a href='tg://user?id={iuid}'>{idata['name']}</a> — <b>{idata['count']}</b> davet")
+    board_text = "\n".join(lines)
+    await update.message.reply_text(
+        f"🏆 <b>Davet Liderlik Tablosu</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n{board_text}",
+        parse_mode=ParseMode.HTML,
+    )
+
 async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     await _exec_stats(update.message)
@@ -1749,10 +1952,25 @@ async def handle_new_member(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text = welcome_msg.format(
             name=member.full_name, id=member.id, group=update.effective_chat.title,
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Grup Kuralları", callback_data="rules")]])
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📢 KriptoDrop TR DUYURU KANALI", url="https://t.me/kriptodropduyuru"),
+                InlineKeyboardButton("📋 Kurallar", url="https://t.me/kriptodropduyuru/46"),
+            ],
+            [
+                InlineKeyboardButton("❓ Sıkça Sorulan Sorular (SSS)", url="https://t.me/kriptodropduyuru/47"),
+            ],
+        ])
         m  = await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
         if auto_delete_sec > 0:
             asyncio.create_task(auto_delete(ctx, update.effective_chat.id, m.message_id, auto_delete_sec))
+        # ── Davet takibi ──────────────────────────────────────
+        # Telegram Bot API'si davet linkini kullananı doğrudan vermez.
+        # Davet kaydı: eğer "invite_link" bilgisi varsa ya da
+        # update.message.from_user farklı biri ise onu tut.
+        # Basit yöntem: bir adminon manuel kayıt için /davetekle komutu,
+        # otomatik olarak ise chat_member update üzerinden izlenir.
+        # Burada ChatMemberUpdated handler ile yakalanır (aşağıda eklendi).
         await notify_admin(ctx, f"👤 Yeni üye: {fmt(member)} (ID: <code>{member.id}</code>) gruba katıldı.")
 
 # ──────────────────────────────────────────────────────────────
@@ -1825,6 +2043,80 @@ async def filter_messages(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(auto_delete(ctx, msg.chat_id, msg.message_id, auto_delete_sec))
 
 # ──────────────────────────────────────────────────────────────
+# ZAMANLANAN DUYURU — Gönderici ve Scheduler
+# ──────────────────────────────────────────────────────────────
+_scheduler: AsyncIOScheduler | None = None
+
+async def _send_scheduled_msg(ctx):
+    """Zamanlı duyuru butonlarıyla gruba gönderir."""
+    if not scheduled_msg_on:
+        return
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📢 KriptoDrop TR DUYURU KANALI", url="https://t.me/kriptodropduyuru"),
+            InlineKeyboardButton("📋 Kurallar", url="https://t.me/kriptodropduyuru/46"),
+        ],
+        [
+            InlineKeyboardButton("❓ Sıkça Sorulan Sorular (SSS)", url="https://t.me/kriptodropduyuru/47"),
+        ],
+    ])
+    try:
+        await ctx.bot.send_message(
+            GROUP_ID,
+            scheduled_msg_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb,
+        )
+        logger.info("✅ Zamanlı duyuru gönderildi.")
+    except TelegramError as e:
+        logger.error(f"Zamanlı duyuru hatası: {e}")
+
+def _reschedule(ctx):
+    """Scheduler'daki zamanlı duyuru jobını saat değiştiğinde günceller."""
+    global _scheduler
+    if _scheduler is None:
+        return
+    try:
+        _scheduler.reschedule_job(
+            "daily_msg",
+            trigger=CronTrigger(hour=scheduled_msg_hour, minute=scheduled_msg_min),
+        )
+        logger.info(f"⏰ Zamanlı duyuru saati güncellendi: {scheduled_msg_hour:02d}:{scheduled_msg_min:02d} UTC")
+    except Exception as e:
+        logger.error(f"Reschedule hatası: {e}")
+
+# ──────────────────────────────────────────────────────────────
+# DAVET TAKİBİ — ChatMemberUpdated handler
+# ──────────────────────────────────────────────────────────────
+from telegram.ext import ChatMemberHandler
+
+async def handle_chat_member(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Gruba katılımları ChatMemberUpdated üzerinden izler ve davetçiyi kaydeder."""
+    result = update.chat_member
+    if not result:
+        return
+    if result.chat.id != GROUP_ID:
+        return
+    old_status = result.old_chat_member.status
+    new_status = result.new_chat_member.status
+    # Yeni katılım: left/kicked → member/administrator
+    joined = (
+        old_status in ("left", "kicked")
+        and new_status in ("member", "administrator", "creator")
+    )
+    if not joined:
+        return
+    inviter = result.from_user  # Davet eden kişi (link oluşturan veya ekleyen)
+    joined_user = result.new_chat_member.user
+    if inviter and inviter.id != joined_user.id and not inviter.is_bot:
+        iid = inviter.id
+        if iid not in invite_tracker:
+            invite_tracker[iid] = {"name": inviter.full_name, "count": 0}
+        invite_tracker[iid]["count"] += 1
+        invite_tracker[iid]["name"]   = inviter.full_name  # güncelle
+        logger.info(f"📨 {inviter.full_name} davet etti → toplam {invite_tracker[iid]['count']}")
+
+# ──────────────────────────────────────────────────────────────
 # HATA HANDLER
 # ──────────────────────────────────────────────────────────────
 async def error_handler(update: object, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1834,26 +2126,40 @@ async def error_handler(update: object, ctx: ContextTypes.DEFAULT_TYPE):
 # POST INIT — Komut listeleri
 # ──────────────────────────────────────────────────────────────
 async def post_init(app: Application):
+    global _scheduler
     # DM'de tüm komutlar görünsün (sadece admin DM açabilir zaten)
     dm_cmds = [
-        BotCommand("start",       "🤖 Yönetim Panelini Aç"),
-        BotCommand("help",        "📋 Tüm Komutları Listele"),
-        BotCommand("groupinfo",   "🏘️ Grup Bilgilerini Gör"),
-        BotCommand("membercount", "👥 Üye Sayısını Gör"),
-        BotCommand("stats",       "📈 Bot İstatistiklerini Gör"),
-        BotCommand("notes",       "📝 Kayıtlı Notları Listele"),
-        BotCommand("broadcast",   "📣 Gruba Duyuru Gönder"),
+        BotCommand("start",        "🤖 Yönetim Panelini Aç"),
+        BotCommand("help",         "📋 Tüm Komutları Listele"),
+        BotCommand("groupinfo",    "🏘️ Grup Bilgilerini Gör"),
+        BotCommand("membercount",  "👥 Üye Sayısını Gör"),
+        BotCommand("stats",        "📈 Bot İstatistiklerini Gör"),
+        BotCommand("notes",        "📝 Kayıtlı Notları Listele"),
+        BotCommand("broadcast",    "📣 Gruba Duyuru Gönder"),
+        BotCommand("topdavetci",   "🏆 Davet Liderlik Tablosu"),
     ]
     # Grupta sadece /start görünsün
     group_cmds = [
-        BotCommand("start",       "🤖 Yönetim Paneli"),
-        BotCommand("select",      "📌 Aralık Seçimi Başlat"),
-        BotCommand("selectend",   "✅ Aralık Seçimini Bitir"),
-        BotCommand("selectcancel","❌ Seçimi İptal Et"),
+        BotCommand("start",        "🤖 Yönetim Paneli"),
+        BotCommand("select",       "📌 Aralık Seçimi Başlat"),
+        BotCommand("selectend",    "✅ Aralık Seçimini Bitir"),
+        BotCommand("selectcancel", "❌ Seçimi İptal Et"),
+        BotCommand("topdavetci",   "🏆 Davet Sıralaması"),
     ]
     await app.bot.set_my_commands(dm_cmds,    scope=BotCommandScopeAllPrivateChats())
     await app.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
     logger.info("✅ Komut listeleri Telegram'a kaydedildi.")
+
+    # ── Zamanlı duyuru scheduler ──────────────────────────
+    _scheduler = AsyncIOScheduler(timezone="UTC")
+    _scheduler.add_job(
+        lambda: asyncio.ensure_future(_send_scheduled_msg(app)),
+        trigger=CronTrigger(hour=scheduled_msg_hour, minute=scheduled_msg_min),
+        id="daily_msg",
+        replace_existing=True,
+    )
+    _scheduler.start()
+    logger.info(f"⏰ Zamanlı duyuru aktif: her gün {scheduled_msg_hour:02d}:{scheduled_msg_min:02d} UTC")
 
 # ──────────────────────────────────────────────────────────────
 # MAIN
@@ -1881,6 +2187,7 @@ def main():
         ("savenote",cmd_savenote),("deletenote",cmd_deletenote),
         ("info",cmd_info),("groupinfo",cmd_groupinfo),
         ("membercount",cmd_membercount),("stats",cmd_stats),("id",cmd_id),
+        ("topdavetci",cmd_topdavetci),
     ]:
         app.add_handler(CommandHandler(name, fn))
 
@@ -1893,6 +2200,7 @@ def main():
         filter_messages,
     ))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_member))
+    app.add_handler(ChatMemberHandler(handle_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_error_handler(error_handler)
 
