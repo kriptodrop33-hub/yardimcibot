@@ -1,100 +1,119 @@
-# 🤖 Telegram Grup Yönetim Botu
+# 🪂 KriptoDropTR Telegram Botu — Kurulum Kılavuzu
 
-Kapsamlı Telegram grup yönetim botu — Railway üzerinde çalışır, DM üzerinden yönetilir.
+## 📦 Gereksinimler
+- Python 3.10+
+- pip
 
-## 🚀 Kurulum
+---
 
-### 1. GitHub'a Yükle
+## 🚀 Kurulum Adımları
+
+### 1. Gerekli kütüphaneleri yükle
 ```bash
-git init
-git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/KULLANICI_ADI/REPO_ADI.git
-git push -u origin main
+pip install -r requirements.txt
 ```
 
-### 2. Railway Kurulumu
-1. [railway.app](https://railway.app) adresine git → **New Project → Deploy from GitHub Repo**
-2. Repoyu seç
-3. **Variables** sekmesine git ve şu değişkenleri ekle:
-
-| Değişken | Değer |
-|----------|-------|
-| `BOT_TOKEN` | BotFather'dan aldığın token |
-| `ADMIN_ID` | Senin Telegram kullanıcı ID'n |
-| `GROUP_ID` | Grubun chat ID'si (örn: `-1001234567890`) |
-
-4. Deploy otomatik başlar ✅
-
----
-
-## 📋 Komutlar
-
-### 👥 Kullanıcı Yönetimi
-| Komut | Açıklama |
-|-------|----------|
-| `/ban [id/reply] [neden]` | Kullanıcıyı banla |
-| `/unban [id/reply]` | Banı kaldır |
-| `/kick [id/reply]` | Kullanıcıyı at (tekrar girebilir) |
-| `/mute [id/reply] [dakika]` | Kullanıcıyı sustur |
-| `/unmute [id/reply]` | Susturmayı kaldır |
-| `/warn [id/reply] [neden]` | Uyarı ver (3'te otomatik ban) |
-| `/unwarn [id/reply]` | Uyarıları sıfırla |
-| `/warnings [id/reply]` | Uyarı sayısını gör |
-
-### 📢 Mesaj Yönetimi
-| Komut | Açıklama |
-|-------|----------|
-| `/pin` | Yanıtladığın mesajı sabitle |
-| `/unpin` | Aktif sabitlemeyi kaldır |
-| `/delete` | Yanıtladığın mesajı sil |
-| `/purge [n]` | Son n mesajı sil (max 100) |
-| `/broadcast [metin]` | Gruba duyuru gönder |
-
-### ⚙️ Grup Ayarları
-| Komut | Açıklama |
-|-------|----------|
-| `/setwelcome [metin]` | Karşılama mesajı ayarla |
-| `/addban [kelime]` | Yasaklı kelime ekle |
-| `/removeban [kelime]` | Yasaklı kelime kaldır |
-| `/listban` | Yasaklı kelimeleri listele |
-| `/autodelete [sn]` | Mesajları otomatik sil (0=kapat) |
-| `/antiflood [on/off]` | Flood korumasını aç/kapat |
-
-### 📊 Bilgi
-| Komut | Açıklama |
-|-------|----------|
-| `/info [id/reply]` | Kullanıcı bilgisi |
-| `/groupinfo` | Grup bilgisi |
-| `/stats` | Bot istatistikleri |
-| `/id` | Chat ve kullanıcı ID'si |
-
----
-
-## 🛡️ Özellikler
-- ✅ Ban / Unban / Kick
-- ✅ Mute ile süre belirleme
-- ✅ 3 uyarıda otomatik ban
-- ✅ Yasaklı kelime filtresi
-- ✅ Anti-flood koruması (10sn'de 5+ mesaj = 5dk mute)
-- ✅ Yeni üye karşılama (özelleştirilebilir)
-- ✅ Otomatik mesaj silme
-- ✅ Duyuru sistemi
-- ✅ Mesaj sabitleme
-- ✅ Sadece admin kullanabilir (DM üzerinden yönetim)
-
----
-
-## 💡 Karşılama Mesajı Değişkenleri
+### 2. `config.py` dosyasını düzenle
+```python
+BOT_TOKEN   = "7123456789:AAFxxxxxx"   # BotFather'dan
+ADMIN_ID    = 987654321                 # Kendi Telegram ID'n
+GROUP_ID    = -1001234567890            # Grubun ID'si
+GROK_API_KEY = "xai-xxxxxxxxxxxxx"     # xAI dashboard'dan
 ```
-{name}  → Kullanıcı adı
-{id}    → Kullanıcı ID'si
-{group} → Grup adı
+
+> **Telegram ID'ni nasıl öğrenirim?**  
+> @userinfobot veya @getmyid_bot'a mesaj at.
+
+> **Grup ID'sini nasıl öğrenirim?**  
+> Botu gruba admin olarak ekledikten sonra gruba `/start` yaz,  
+> konsol loglarında `chat_id` görünür.  
+> Ya da @getidsbot ile öğrenebilirsin.
+
+### 3. Botu başlat
+```bash
+python bot.py
 ```
-Örnek: `/setwelcome Merhaba {name}! Gruba hoş geldin 🎉`
 
 ---
 
-## 🔧 Gereksinimler
-- Python 3.11+
-- `python-telegram-bot==20.7`
+## 🛠 Özellikler
+
+### Admin (DM üzerinden):
+| Özellik | Açıklama |
+|---|---|
+| ➕ Airdrop Ekle | Adım adım form ile airdrop ekle |
+| 📋 Airdropları Listele | Tüm airdropları admin görünümüyle gör |
+| ✏️ Airdrop Aktif/Pasif | Airdropleri geçici kapat/aç |
+| 🗑 Airdrop Sil | Kalıcı sil |
+| 📌 Sabitle | Öne çıkarılacak airdropları sabitle |
+| 📰 Haber Gönder | Grok AI ile konu bazlı haber oluştur, gruba gönder |
+| 📢 Duyuru Yap | Gruba manuel duyuru yaz |
+| 📊 İstatistikler | Toplam airdrop, haber ve kategori özeti |
+| 🔄 Grup Bilgisi | Üye sayısı ve grup detayları |
+
+### Kullanıcı (DM):
+| Özellik | Açıklama |
+|---|---|
+| 🪂 Aktif Airdroplar | Tüm aktif airdropları göster |
+| 📌 Öne Çıkanlar | Sabitlenmiş airdroplar |
+| 🔍 Kategoriye Göre | DeFi, NFT, GameFi vb. filtrele |
+| 📅 Son Eklenenler | En yeni 5 airdrop |
+| ❓ Yardım | Airdrop rehberi |
+
+### Grup komutları:
+| Komut | Açıklama |
+|---|---|
+| `/airdrops` | Aktif airdropları özet listele |
+| `/haberler` | Son haber başlıklarını listele |
+| `/start` | Bota özel mesaj atmaya yönlendir |
+
+---
+
+## 🔐 Güvenlik Notları
+- Sadece `ADMIN_ID` olarak tanımladığın hesap admin paneline erişebilir.
+- Botu gruba **yönetici** olarak ekle (mesaj gönderebilmesi için).
+- `config.py` dosyasını asla paylaşma/commit etme.
+
+---
+
+## 📁 Dosya Yapısı
+```
+kriptodrop_bot/
+├── bot.py            # Ana bot kodu
+├── config.py         # Konfigürasyon (tokenlar burada)
+├── requirements.txt  # Python bağımlılıkları
+├── kriptodrop.db     # SQLite veritabanı (otomatik oluşur)
+└── bot.log           # Log dosyası (otomatik oluşur)
+```
+
+---
+
+## 🔧 Sürekli Çalıştırma (Linux/VPS)
+
+### systemd servisi olarak:
+```bash
+sudo nano /etc/systemd/system/kriptodrop.service
+```
+```ini
+[Unit]
+Description=KriptoDropTR Telegram Bot
+After=network.target
+
+[Service]
+WorkingDirectory=/home/user/kriptodrop_bot
+ExecStart=/usr/bin/python3 bot.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+```bash
+sudo systemctl enable kriptodrop && sudo systemctl start kriptodrop
+```
+
+### screen ile (basit yöntem):
+```bash
+screen -S kriptobot
+python bot.py
+# Ctrl+A → D ile çıkış
+```
