@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KriptoDropTR Telegram Botu v2.0"""
+"""KriptoDropTR Telegram Botu v3.0 — Düzeltilmiş & Geliştirilmiş"""
 
 import sqlite3, logging, httpx
 from datetime import datetime
@@ -18,6 +18,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ── CONVERSATION STATES ───────────────────────────────────────────────────────
 (AIRDROP_NAME, AIRDROP_PROJECT, AIRDROP_DESC, AIRDROP_REWARD,
  AIRDROP_LINK, AIRDROP_DEADLINE, AIRDROP_CATEGORY,
  NEWS_TOPIC, NEWS_PREVIEW,
@@ -28,7 +29,7 @@ CATEGORIES = ["🪙 DeFi","🎮 GameFi","🖼 NFT","🔗 Layer1/Layer2","📱 We
 BACK_ADMIN = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Ana Menü", callback_data="back_admin")]])
 BACK_USER  = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Ana Menü", callback_data="back_user")]])
 
-# ── DB ────────────────────────────────────────────────────────────────────────
+# ── VERİTABANI ────────────────────────────────────────────────────────────────
 def init_db():
     with sqlite3.connect("kriptodrop.db") as c:
         c.executescript("""
@@ -71,17 +72,20 @@ def fmt(row, idx=None, admin=False):
         f"⏰ Son Tarih: {row['deadline'] or 'Belirtilmedi'}",
         f"📅 Eklenme: {str(row['created_at'])[:10]}",
     ]
-    if admin: lines.append("📊 " + ("🟢 Aktif" if row["active"] else "🔴 Pasif"))
+    if admin:
+        lines.append("📊 " + ("🟢 Aktif" if row["active"] else "🔴 Pasif"))
     return "\n".join(lines)
 
 # ── GROK AI ───────────────────────────────────────────────────────────────────
 GROK_URL = "https://api.x.ai/v1/chat/completions"
+# Kullanılabilir modeller: grok-2-latest, grok-beta, grok-3-latest (varsa)
+GROK_MODEL = "grok-2-latest"
 
 NEWS_SYS = """Sen KriptoDropTR adlı Türkçe kripto Telegram grubu için haber asistanısın.
 Verilen konuda güncel, bilgilendirici, akıcı Türkçe kripto haberi/analizi yaz.
 Emoji kullan, paragraf formatı kullan, 250-400 kelime olsun.
 Sonuna '💡 Önemli Not:' ile kısa bir yorum ekle.
-Format: 📰 [BAŞLIK] ... içerik ... 💡 Önemli Not: ..."""
+Format: 📰 [BAŞLIK]\n\n... içerik ...\n\n💡 Önemli Not: ..."""
 
 ANALYZE_SYS = """Sen KriptoDropTR için kripto analiz uzmanısın.
 Türkçe, kısa ve öz analiz yap.
@@ -96,28 +100,38 @@ Format:
 
 async def call_grok(system: str, prompt: str, tokens: int = 800) -> str:
     try:
-        async with httpx.AsyncClient(timeout=45) as client:
-            r = await client.post(GROK_URL,
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                GROK_URL,
                 headers={"Authorization": f"Bearer {GROK_API_KEY}", "Content-Type": "application/json"},
-                json={"model": "grok-3-latest",
-                      "messages": [{"role":"system","content":system},
-                                   {"role":"user","content":prompt}],
-                      "max_tokens": tokens, "temperature": 0.7})
+                json={
+                    "model": GROK_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "max_tokens": tokens,
+                    "temperature": 0.7
+                }
+            )
         if r.status_code == 401:
-            return "❌ API Anahtarı hatalı! GROQ_API_KEY değerini kontrol et."
+            return "❌ API Anahtarı hatalı! GROQ_API_KEY (Railway'de GROK_API_KEY) değerini kontrol et."
         if r.status_code == 429:
             return "❌ API limit aşıldı. Birkaç dakika sonra tekrar dene."
+        if r.status_code == 404:
+            return f"❌ Model bulunamadı ({GROK_MODEL}). xAI hesabından erişilebilir modeli kontrol et."
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"].strip()
+        data = r.json()
+        return data["choices"][0]["message"]["content"].strip()
     except httpx.TimeoutException:
-        return "⏱ Grok API zaman aşımı. Tekrar dene."
+        return "⏱ Grok API zaman aşımı (60s). Tekrar dene."
     except httpx.HTTPStatusError as e:
-        return f"❌ API Hatası {e.response.status_code}: {e.response.text[:150]}"
+        return f"❌ API Hatası {e.response.status_code}: {e.response.text[:200]}"
     except Exception as e:
         logger.error(f"Grok hata: {e}", exc_info=True)
-        return f"❌ Hata: {type(e).__name__}: {e}"
+        return f"❌ Beklenmeyen hata: {type(e).__name__}: {e}"
 
-# ── COINGECKO FİYAT ───────────────────────────────────────────────────────────
+# ── COİNGECKO FİYAT ───────────────────────────────────────────────────────────
 COIN_IDS = {
     "btc":"bitcoin","eth":"ethereum","sol":"solana","bnb":"binancecoin",
     "avax":"avalanche-2","matic":"matic-network","arb":"arbitrum","op":"optimism",
@@ -140,19 +154,21 @@ async def get_price(coin: str) -> str:
         r.raise_for_status()
         d  = r.json()
         md = d["market_data"]
-        p   = md["current_price"].get("usd",0)
-        h1  = md["price_change_percentage_1h_in_currency"].get("usd",0) or 0
-        h24 = md["price_change_percentage_24h"] or 0
-        d7  = md["price_change_percentage_7d"] or 0
-        cap = md["market_cap"].get("usd",0)
-        vol = md["total_volume"].get("usd",0)
-        ath = md["ath"].get("usd",0)
-        rank= d.get("market_cap_rank","?")
-        def arrow(v): return "🟢 +" if v>=0 else "🔴 "
+        p   = md["current_price"].get("usd", 0)
+        h1  = md.get("price_change_percentage_1h_in_currency", {}).get("usd", 0) or 0
+        h24 = md.get("price_change_percentage_24h") or 0
+        d7  = md.get("price_change_percentage_7d") or 0
+        cap = md["market_cap"].get("usd", 0)
+        vol = md["total_volume"].get("usd", 0)
+        ath = md["ath"].get("usd", 0)
+        rank = d.get("market_cap_rank", "?")
+
+        def arrow(v): return "🟢 +" if v >= 0 else "🔴 "
         def fn(n):
-            if n>=1e9: return f"${n/1e9:.2f}B"
-            if n>=1e6: return f"${n/1e6:.2f}M"
+            if n >= 1e9: return f"${n/1e9:.2f}B"
+            if n >= 1e6: return f"${n/1e6:.2f}M"
             return f"${n:,.0f}"
+
         return (f"💰 *{d['name']} ({d['symbol'].upper()})*\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"💵 Fiyat: *${p:,.6g}*\n"
@@ -206,8 +222,10 @@ async def show_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📜 Haber Geçmişi",       callback_data="news_history"),
          InlineKeyboardButton("📣 Duyuru Geçmişi",      callback_data="ann_history")],
     ])
-    try: await update.effective_message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-    except: await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    try:
+        await update.effective_message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    except:
+        await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 async def show_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with db() as conn:
@@ -224,8 +242,10 @@ async def show_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("💰 Coin Fiyatı",       callback_data="price_menu"),
          InlineKeyboardButton("❓ Yardım",             callback_data="u_help")],
     ])
-    try: await update.effective_message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-    except: await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    try:
+        await update.effective_message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    except:
+        await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 # ── AIRDROP EKLEME CONV ───────────────────────────────────────────────────────
 async def add_airdrop_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -238,7 +258,9 @@ async def add_airdrop_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def s_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text.strip()
-    await update.message.reply_text(f"✅ Ad: *{context.user_data['name']}*\n\n🏢 *Proje/Token adı:*\n_(Örn: ARB, Arbitrum)_", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(
+        f"✅ Ad: *{context.user_data['name']}*\n\n🏢 *Proje/Token adı:*\n_(Örn: ARB, Arbitrum)_",
+        parse_mode=ParseMode.MARKDOWN)
     return AIRDROP_PROJECT
 
 async def s_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -292,14 +314,14 @@ async def s_reward(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def s_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = update.message.text.strip()
-    context.user_data["link"] = "" if t.lower() in ("yok","-","none") else t
+    context.user_data["link"] = "" if t.lower() in ("yok", "-", "none") else t
     await update.message.reply_text("⏰ *Son katılım tarihi:*\n_(Örn: 31.12.2025 veya 'belirsiz')_", parse_mode=ParseMode.MARKDOWN)
     return AIRDROP_DEADLINE
 
 async def s_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = update.message.text.strip()
-    context.user_data["deadline"] = "" if t.lower() in ("belirsiz","-","yok") else t
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(c, callback_data=f"nc_{i}")] for i,c in enumerate(CATEGORIES)])
+    context.user_data["deadline"] = "" if t.lower() in ("belirsiz", "-", "yok") else t
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(c, callback_data=f"nc_{i}")] for i, c in enumerate(CATEGORIES)])
     await update.message.reply_text("🏷 *Kategori seç:*", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     return AIRDROP_CATEGORY
 
@@ -307,7 +329,8 @@ async def s_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     context.user_data["category"] = CATEGORIES[int(q.data.split("_")[1])]
     with db() as conn:
-        conn.execute("INSERT INTO airdrops (name,project,description,reward,link,deadline,category) VALUES(?,?,?,?,?,?,?)",
+        conn.execute(
+            "INSERT INTO airdrops (name,project,description,reward,link,deadline,category) VALUES(?,?,?,?,?,?,?)",
             (context.user_data["name"], context.user_data["project"], context.user_data.get("desc",""),
              context.user_data["reward"], context.user_data["link"],
              context.user_data["deadline"], context.user_data["category"]))
@@ -326,6 +349,8 @@ async def s_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ── HABER CONV ────────────────────────────────────────────────────────────────
+# DÜZELTİLDİ: ConversationHandler'a doğru state geçişleri ve çakışma giderildi
+
 QUICK_TOPICS = [
     ("₿ Bitcoin","Bitcoin"), ("Ξ Ethereum","Ethereum"),
     ("◎ Solana","Solana"),   ("🔵 BNB Chain","BNB Chain"),
@@ -334,76 +359,122 @@ QUICK_TOPICS = [
 ]
 
 async def send_news_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Haber menüsünü göster — hem callback hem command ile çalışır."""
     q = update.callback_query
-    if q: await q.answer()
+    if q:
+        await q.answer()
     context.user_data.pop("news_content", None)
     context.user_data.pop("news_topic", None)
     rows = [QUICK_TOPICS[i:i+2] for i in range(0, len(QUICK_TOPICS), 2)]
-    kb_rows = [[InlineKeyboardButton(n, callback_data=f"qnews_{t}") for n,t in row] for row in rows]
+    kb_rows = [[InlineKeyboardButton(n, callback_data=f"qnews_{t}") for n, t in row] for row in rows]
     kb_rows.append([InlineKeyboardButton("✏️ Kendi Konumu Yaz", callback_data="news_manual")])
     kb_rows.append([InlineKeyboardButton("❌ İptal", callback_data="back_admin")])
-    await update.effective_message.reply_text(
-        "📰 *Haber Oluştur (Grok AI)*\n━━━━━━━━━━━━━━━━━━━━\nKonu seç veya kendin yaz:",
-        reply_markup=InlineKeyboardMarkup(kb_rows), parse_mode=ParseMode.MARKDOWN)
+    msg_text = "📰 *Haber Oluştur (Grok AI)*\n━━━━━━━━━━━━━━━━━━━━\nKonu seç veya kendin yaz:"
+    if q:
+        try:
+            await q.edit_message_text(msg_text, reply_markup=InlineKeyboardMarkup(kb_rows), parse_mode=ParseMode.MARKDOWN)
+        except:
+            await q.message.reply_text(msg_text, reply_markup=InlineKeyboardMarkup(kb_rows), parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.effective_message.reply_text(msg_text, reply_markup=InlineKeyboardMarkup(kb_rows), parse_mode=ParseMode.MARKDOWN)
     return NEWS_TOPIC
 
 async def cb_quick_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    topic = q.data[6:]  # remove "qnews_"
-    return await _gen_news(update, context, topic, q.message)
+    topic = q.data[6:]  # "qnews_" prefix'i kaldır
+    return await _gen_news(update, context, topic)
 
 async def cb_news_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    await q.message.reply_text("✏️ *Haber konusunu yaz:*\n_(Örn: Ethereum ETF onayı)_\n\n❌ /iptal", parse_mode=ParseMode.MARKDOWN)
+    await q.message.reply_text(
+        "✏️ *Haber konusunu yaz:*\n_(Örn: Ethereum ETF onayı)_\n\n❌ /iptal",
+        parse_mode=ParseMode.MARKDOWN)
     return NEWS_TOPIC
 
 async def news_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await _gen_news(update, context, update.message.text.strip(), update.message)
+    topic = update.message.text.strip()
+    return await _gen_news(update, context, topic)
 
-async def _gen_news(update, context, topic: str, reply_to):
-    wait = await reply_to.reply_text(f"⏳ *{topic}* hakkında haber yazılıyor...")
-    content = await call_grok(NEWS_SYS, f"'{topic}' hakkında KriptoDropTR grubu için haber/analiz yaz.", 900)
+async def _gen_news(update: Update, context: ContextTypes.DEFAULT_TYPE, topic: str):
+    """Grok ile haber üret, önizleme göster."""
+    # Bekleme mesajı gönder
+    q = update.callback_query
+    if q:
+        wait = await q.message.reply_text(f"⏳ *{topic}* hakkında haber yazılıyor...", parse_mode=ParseMode.MARKDOWN)
+    else:
+        wait = await update.message.reply_text(f"⏳ *{topic}* hakkında haber yazılıyor...", parse_mode=ParseMode.MARKDOWN)
+
+    content = await call_grok(
+        NEWS_SYS,
+        f"'{topic}' hakkında KriptoDropTR grubu için güncel haber/analiz yaz.",
+        900
+    )
     await wait.delete()
 
     if content.startswith("❌") or content.startswith("⏱"):
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Tekrar Dene", callback_data=f"qnews_{topic}")],
+            [InlineKeyboardButton("✏️ Başka Konu",  callback_data="news_manual")],
             [InlineKeyboardButton("❌ İptal",        callback_data="back_admin")],
         ])
-        await reply_to.reply_text(
-            f"*Haber oluşturulamadı:*\n\n{content}\n\n_API anahtarını ve model adını kontrol edin._",
-            reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        err_text = (f"❌ *Haber oluşturulamadı*\n━━━━━━━━━━━━━━\n{content}\n\n"
+                    f"_Konu: {topic}_\n_Model: {GROK_MODEL}_")
+        if q:
+            await q.message.reply_text(err_text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        else:
+            await update.message.reply_text(err_text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
         return NEWS_TOPIC
 
     context.user_data["news_content"] = content
     context.user_data["news_topic"]   = topic
+
     preview = f"📰 *Önizleme — {topic}*\n━━━━━━━━━━━━━━━━━━━━\n\n{content}"
-    if len(preview) > 4000: preview = preview[:3990] + "..."
+    if len(preview) > 4000:
+        preview = preview[:3990] + "..."
+
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Gruba Gönder",    callback_data="news_do_send"),
          InlineKeyboardButton("🔄 Yeniden Oluştur", callback_data=f"qnews_{topic}")],
-        [InlineKeyboardButton("✏️ Farklı Konu",     callback_data="send_news"),
+        [InlineKeyboardButton("✏️ Farklı Konu",     callback_data="news_manual"),
          InlineKeyboardButton("❌ İptal",            callback_data="back_admin")],
     ])
-    await reply_to.reply_text(preview, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    if q:
+        await q.message.reply_text(preview, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text(preview, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     return NEWS_PREVIEW
 
 async def news_do_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer("Gönderiliyor...")
-    content = context.user_data.get("news_content","")
-    topic   = context.user_data.get("news_topic","Genel")
+    """Haberi gruba gönder."""
+    q = update.callback_query
+    await q.answer("Gönderiliyor...")
+    content = context.user_data.get("news_content", "")
+    topic   = context.user_data.get("news_topic", "Genel")
+
     if not content:
-        await q.edit_message_text("❌ İçerik bulunamadı.", reply_markup=BACK_ADMIN)
+        await q.edit_message_text(
+            "❌ İçerik bulunamadı. Lütfen yeni haber oluştur.",
+            reply_markup=BACK_ADMIN)
         return ConversationHandler.END
+
     msg = f"📰 *KriptoDropTR — Kripto Haber*\n━━━━━━━━━━━━━━━━━━━━\n\n{content}\n\n🔔 @KriptoDropTR"
-    if len(msg) > 4096: msg = msg[:4090] + "..."
+    if len(msg) > 4096:
+        msg = msg[:4090] + "..."
+
     try:
         await context.bot.send_message(GROUP_ID, msg, parse_mode=ParseMode.MARKDOWN)
         with db() as conn:
             conn.execute("INSERT INTO news_log (topic,content) VALUES(?,?)", (topic, content))
-        await q.edit_message_text(f"✅ Haber gruba gönderildi!\n📌 Konu: {topic}", reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
+        await q.edit_message_text(
+            f"✅ *Haber gruba gönderildi!*\n📌 Konu: {topic}",
+            reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
+        logger.info(f"Haber gönderildi: {topic}")
     except Exception as e:
-        await q.edit_message_text(f"❌ Gönderme hatası:\n`{e}`\n\nBotun grupta admin olduğundan emin ol.", reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
+        logger.error(f"Haber gönderme hatası: {e}")
+        await q.edit_message_text(
+            f"❌ *Gönderme hatası:*\n`{e}`\n\n_Botun grupta admin olduğundan emin ol._",
+            reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
+
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -411,12 +482,12 @@ async def news_do_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def coin_analysis_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("₿ BTC",  callback_data="qa_Bitcoin"),
-         InlineKeyboardButton("Ξ ETH",  callback_data="qa_Ethereum"),
-         InlineKeyboardButton("◎ SOL",  callback_data="qa_Solana")],
-        [InlineKeyboardButton("🔵 BNB", callback_data="qa_BNB"),
-         InlineKeyboardButton("🔶 AVAX",callback_data="qa_Avalanche"),
-         InlineKeyboardButton("🟣 ARB", callback_data="qa_Arbitrum")],
+        [InlineKeyboardButton("₿ BTC",   callback_data="qa_Bitcoin"),
+         InlineKeyboardButton("Ξ ETH",   callback_data="qa_Ethereum"),
+         InlineKeyboardButton("◎ SOL",   callback_data="qa_Solana")],
+        [InlineKeyboardButton("🔵 BNB",  callback_data="qa_BNB"),
+         InlineKeyboardButton("🔶 AVAX", callback_data="qa_Avalanche"),
+         InlineKeyboardButton("🟣 ARB",  callback_data="qa_Arbitrum")],
         [InlineKeyboardButton("✏️ Başka Coin", callback_data="qa_custom")],
         [InlineKeyboardButton("❌ İptal", callback_data="back_admin")],
     ])
@@ -424,11 +495,14 @@ async def coin_analysis_entry(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def cb_quick_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    coin = q.data[3:]
+    coin = q.data[3:]  # "qa_" prefix'i kaldır
+    if coin == "custom":
+        await q.message.reply_text("✏️ Analiz etmek istediğin coini yaz:\n_(Örn: Chainlink)_")
+        return
     wait = await q.message.reply_text(f"🔍 {coin} analizi yapılıyor...")
-    result = await call_grok(ANALYZE_SYS, f"'{coin}' için kısa analiz yap.", 600)
+    result = await call_grok(ANALYZE_SYS, f"'{coin}' için güncel kısa analiz yap. Türkçe.", 600)
     await wait.delete()
-    context.user_data["analysis"] = result
+    context.user_data["analysis"]      = result
     context.user_data["analysis_coin"] = coin
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 Gruba Gönder", callback_data=f"send_analysis_{coin}")],
@@ -438,8 +512,8 @@ async def cb_quick_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    coin = q.data.replace("send_analysis_","")
-    content = context.user_data.get("analysis","")
+    coin    = q.data.replace("send_analysis_", "")
+    content = context.user_data.get("analysis", "")
     msg = f"🔍 *KriptoDropTR — Coin Analizi*\n━━━━━━━━━━━━━━━━━━━━\n\n{content}\n\n🔔 @KriptoDropTR"
     try:
         await context.bot.send_message(GROUP_ID, msg, parse_mode=ParseMode.MARKDOWN)
@@ -474,8 +548,8 @@ async def ann_redo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ann_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    text = context.user_data.get("announce","")
-    msg = f"📢 *DUYURU*\n━━━━━━━━━━━━━━━━━━━━\n\n{text}\n\n🔔 @KriptoDropTR"
+    text = context.user_data.get("announce", "")
+    msg  = f"📢 *DUYURU*\n━━━━━━━━━━━━━━━━━━━━\n\n{text}\n\n🔔 @KriptoDropTR"
     try:
         await context.bot.send_message(GROUP_ID, msg, parse_mode=ParseMode.MARKDOWN)
         with db() as conn:
@@ -493,8 +567,8 @@ async def price_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pop = [("₿ BTC","btc"),("Ξ ETH","eth"),("◎ SOL","sol"),
            ("⚡ XRP","xrp"),("🔵 BNB","bnb"),("🔴 TON","ton")]
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(n, callback_data=f"qp_{s}") for n,s in pop[:3]],
-        [InlineKeyboardButton(n, callback_data=f"qp_{s}") for n,s in pop[3:]],
+        [InlineKeyboardButton(n, callback_data=f"qp_{s}") for n, s in pop[:3]],
+        [InlineKeyboardButton(n, callback_data=f"qp_{s}") for n, s in pop[3:]],
         [InlineKeyboardButton("✏️ Başka Coin", callback_data="price_custom")],
         [InlineKeyboardButton("🔙 Geri", callback_data="back_admin" if is_admin(uid) else "back_user")],
     ])
@@ -502,7 +576,7 @@ async def price_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cb_quick_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    coin = q.data[3:]
+    coin = q.data[3:]  # "qp_" prefix'i kaldır
     wait = await q.message.reply_text(f"⏳ {coin.upper()} fiyatı alınıyor...")
     result = await get_price(coin)
     await wait.delete()
@@ -517,7 +591,9 @@ async def cb_quick_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def price_custom_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     context.user_data["price_back"] = "back_admin" if is_admin(q.from_user.id) else "back_user"
-    await q.message.reply_text("✏️ *Coin sembolünü* gir:\n_(Örn: BTC, ETH, AVAX, NEAR...)_\n\n❌ /iptal", parse_mode=ParseMode.MARKDOWN)
+    await q.message.reply_text(
+        "✏️ *Coin sembolünü* gir:\n_(Örn: BTC, ETH, AVAX, NEAR...)_\n\n❌ /iptal",
+        parse_mode=ParseMode.MARKDOWN)
     return PRICE_COIN
 
 async def price_coin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -525,9 +601,9 @@ async def price_coin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wait = await update.message.reply_text(f"⏳ {coin.upper()} alınıyor...")
     result = await get_price(coin)
     await wait.delete()
-    back = context.user_data.get("price_back","back_admin")
+    back = context.user_data.get("price_back", "back_admin")
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Yenile", callback_data=f"qp_{coin.lower()}"),
+        InlineKeyboardButton("🔄 Yenile",     callback_data=f"qp_{coin.lower()}"),
         InlineKeyboardButton("💰 Başka Coin", callback_data="price_menu"),
     ],[InlineKeyboardButton("🏠 Ana Menü", callback_data=back)]])
     await update.message.reply_text(result, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
@@ -537,12 +613,12 @@ async def price_coin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manage_airdrops(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Listele",       callback_data="mng_list"),
-         InlineKeyboardButton("🗑 Sil",            callback_data="mng_delete")],
-        [InlineKeyboardButton("✅ Aktif/Pasif",    callback_data="mng_toggle"),
-         InlineKeyboardButton("📌 Sabitle",        callback_data="mng_pin")],
-        [InlineKeyboardButton("📢 Gruba Duyur",   callback_data="mng_broadcast")],
-        [InlineKeyboardButton("🏠 Ana Menü",      callback_data="back_admin")],
+        [InlineKeyboardButton("📋 Listele",      callback_data="mng_list"),
+         InlineKeyboardButton("🗑 Sil",           callback_data="mng_delete")],
+        [InlineKeyboardButton("✅ Aktif/Pasif",   callback_data="mng_toggle"),
+         InlineKeyboardButton("📌 Sabitle",       callback_data="mng_pin")],
+        [InlineKeyboardButton("📢 Gruba Duyur",  callback_data="mng_broadcast")],
+        [InlineKeyboardButton("🏠 Ana Menü",     callback_data="back_admin")],
     ])
     await q.edit_message_text("🗂 *Airdrop Yönetimi*", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
@@ -565,12 +641,18 @@ async def mng_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rows:
         await q.edit_message_text("📭 Airdrop yok.", reply_markup=BACK_ADMIN); return
     icons = {"mng_delete":"🗑","mng_toggle":"✅","mng_pin":"📌","mng_broadcast":"📢"}
-    icon  = icons.get(action,"•")
+    icon  = icons.get(action, "•")
     kb = []
     for r in rows:
-        state = (" 🟢" if r["active"] else " 🔴") if action=="mng_toggle" else (" 📌" if r["pinned"] else "") if action=="mng_pin" else ""
-        kb.append([InlineKeyboardButton(f"{icon} [{r['id']}] {r['name']}{state}",
-                    callback_data=f"do_{action.replace('mng_','')}_{r['id']}")])
+        if action == "mng_toggle":
+            state = " 🟢" if r["active"] else " 🔴"
+        elif action == "mng_pin":
+            state = " 📌" if r["pinned"] else ""
+        else:
+            state = ""
+        kb.append([InlineKeyboardButton(
+            f"{icon} [{r['id']}] {r['name']}{state}",
+            callback_data=f"do_{action.replace('mng_','')}_{r['id']}")])
     kb.append([InlineKeyboardButton("🔙 Geri", callback_data="manage_airdrops")])
     await q.edit_message_text(f"{icon} *Airdrop seç:*", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
@@ -579,8 +661,10 @@ async def do_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     aid = int(q.data.split("_")[-1])
     with db() as conn:
         row = conn.execute("SELECT name FROM airdrops WHERE id=?", (aid,)).fetchone()
-        if row: conn.execute("DELETE FROM airdrops WHERE id=?", (aid,))
-    await q.edit_message_text(f"🗑 *{row['name'] if row else aid}* silindi.", reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
+        if row:
+            conn.execute("DELETE FROM airdrops WHERE id=?", (aid,))
+    name = row["name"] if row else str(aid)
+    await q.edit_message_text(f"🗑 *{name}* silindi.", reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
 
 async def do_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -615,33 +699,85 @@ async def do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
            + fmt(row) + "\n\n🔔 @KriptoDropTR")
     kb = [[InlineKeyboardButton("🚀 Hemen Katıl!", url=row["link"])]] if row["link"] else []
     try:
-        await context.bot.send_message(GROUP_ID, msg,
+        await context.bot.send_message(
+            GROUP_ID, msg,
             reply_markup=InlineKeyboardMarkup(kb) if kb else None,
             parse_mode=ParseMode.MARKDOWN)
         with db() as conn:
             conn.execute("UPDATE airdrops SET broadcast=broadcast+1 WHERE id=?", (aid,))
-        await q.edit_message_text(f"✅ *{row['name']}* gruba duyuruldu!", reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
+        await q.edit_message_text(
+            f"✅ *{row['name']}* gruba duyuruldu!", reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         await q.edit_message_text(f"❌ Hata: {e}", reply_markup=BACK_ADMIN)
 
-# ── İSTATİSTİK ────────────────────────────────────────────────────────────────
+# ── İSTATİSTİK (GENİŞLETİLMİŞ) ───────────────────────────────────────────────
 async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     with db() as conn:
-        total  = conn.execute("SELECT COUNT(*) FROM airdrops").fetchone()[0]
-        active = conn.execute("SELECT COUNT(*) FROM airdrops WHERE active=1").fetchone()[0]
-        pinned = conn.execute("SELECT COUNT(*) FROM airdrops WHERE pinned=1").fetchone()[0]
-        news_n = conn.execute("SELECT COUNT(*) FROM news_log").fetchone()[0]
-        ann_n  = conn.execute("SELECT COUNT(*) FROM announcements").fetchone()[0]
-        cats   = conn.execute("SELECT category,COUNT(*) n FROM airdrops GROUP BY category ORDER BY n DESC").fetchall()
-        last_n = conn.execute("SELECT topic,sent_at FROM news_log ORDER BY id DESC LIMIT 3").fetchall()
-    cat_t = "\n".join([f"  • {r['category'] or 'Diğer'}: *{r['n']}*" for r in cats]) or "  Yok"
-    news_t = "\n".join([f"  • {r['topic']} _{r['sent_at'][:10]}_" for r in last_n]) if last_n else ""
-    text = (f"📊 *Bot İstatistikleri*\n━━━━━━━━━━━━━━━━━━━━\n"
-            f"🪂 Toplam: *{total}* | Aktif: *{active}* | 📌 *{pinned}*\n"
-            f"📰 Haber: *{news_n}* | 📢 Duyuru: *{ann_n}*\n\n"
-            f"📁 *Kategoriler:*\n{cat_t}"
-            + (f"\n\n📰 *Son Haberler:*\n{news_t}" if news_t else ""))
+        total     = conn.execute("SELECT COUNT(*) FROM airdrops").fetchone()[0]
+        active    = conn.execute("SELECT COUNT(*) FROM airdrops WHERE active=1").fetchone()[0]
+        passive   = conn.execute("SELECT COUNT(*) FROM airdrops WHERE active=0").fetchone()[0]
+        pinned    = conn.execute("SELECT COUNT(*) FROM airdrops WHERE pinned=1").fetchone()[0]
+        broadcast = conn.execute("SELECT SUM(broadcast) FROM airdrops").fetchone()[0] or 0
+        news_n    = conn.execute("SELECT COUNT(*) FROM news_log").fetchone()[0]
+        ann_n     = conn.execute("SELECT COUNT(*) FROM announcements").fetchone()[0]
+        cats      = conn.execute(
+            "SELECT category, COUNT(*) n FROM airdrops GROUP BY category ORDER BY n DESC"
+        ).fetchall()
+        # Bu ayın istatistikleri
+        this_month_airdrops = conn.execute(
+            "SELECT COUNT(*) FROM airdrops WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')"
+        ).fetchone()[0]
+        this_month_news = conn.execute(
+            "SELECT COUNT(*) FROM news_log WHERE strftime('%Y-%m', sent_at) = strftime('%Y-%m', 'now')"
+        ).fetchone()[0]
+        # Son eklenen airdrop
+        last_airdrop = conn.execute(
+            "SELECT name, created_at FROM airdrops ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        # En çok duyurulan airdrop
+        top_broadcast = conn.execute(
+            "SELECT name, broadcast FROM airdrops WHERE broadcast > 0 ORDER BY broadcast DESC LIMIT 1"
+        ).fetchone()
+        # Son haberler
+        last_news = conn.execute(
+            "SELECT topic, sent_at FROM news_log ORDER BY id DESC LIMIT 3"
+        ).fetchall()
+
+    # Kategori satırları
+    cat_lines = "\n".join(
+        [f"  {r['category'] or 'Diğer'}: *{r['n']}*" for r in cats]
+    ) or "  Henüz yok"
+
+    # Son haberler
+    news_lines = "\n".join(
+        [f"  • {r['topic']} _({r['sent_at'][:10]})_" for r in last_news]
+    ) if last_news else "  Henüz gönderilmedi"
+
+    # Son airdrop
+    last_a_text = f"{last_airdrop['name']} _({last_airdrop['created_at'][:10]})_" if last_airdrop else "Yok"
+
+    # Top broadcast
+    top_b_text = f"{top_broadcast['name']} ({top_broadcast['broadcast']}x)" if top_broadcast else "Yok"
+
+    text = (
+        f"📊 *KriptoDropTR Bot İstatistikleri*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🪂 *Airdroplar*\n"
+        f"  Toplam: *{total}* | Aktif: *{active}* | Pasif: *{passive}*\n"
+        f"  📌 Sabitlenmiş: *{pinned}*\n"
+        f"  📢 Toplam Duyuru: *{broadcast}* kez\n"
+        f"  🏆 En Çok Duyurulan: {top_b_text}\n"
+        f"  🆕 Son Eklenen: {last_a_text}\n\n"
+        f"📅 *Bu Ay*\n"
+        f"  Yeni Airdrop: *{this_month_airdrops}*\n"
+        f"  Yeni Haber: *{this_month_news}*\n\n"
+        f"📰 *İçerik*\n"
+        f"  Haber: *{news_n}* | Duyuru: *{ann_n}*\n\n"
+        f"🏷 *Kategori Dağılımı*\n{cat_lines}\n\n"
+        f"📰 *Son Haberler*\n{news_lines}\n\n"
+        f"🕐 _{datetime.now().strftime('%d.%m.%Y %H:%M')}_"
+    )
     await q.edit_message_text(text, reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
 
 async def group_info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -650,7 +786,9 @@ async def group_info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         chat  = await context.bot.get_chat(GROUP_ID)
         count = await context.bot.get_chat_member_count(GROUP_ID)
         text  = (f"👥 *Grup Bilgisi*\n━━━━━━━━━━━━━━━━━━━━\n"
-                 f"📛 *{chat.title}*\n👥 Üye: *{count}*\n🆔 `{GROUP_ID}`\n"
+                 f"📛 *{chat.title}*\n"
+                 f"👥 Üye: *{count}*\n"
+                 f"🆔 `{GROUP_ID}`\n"
                  f"📝 {chat.description or 'Açıklama yok'}")
     except Exception as e:
         text = f"⚠️ Hata:\n`{e}`"
@@ -663,7 +801,7 @@ async def news_history_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not rows:
         await q.edit_message_text("📭 Haber yok.", reply_markup=BACK_ADMIN); return
     text = "📰 *Son 10 Haber:*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    for i,r in enumerate(rows,1):
+    for i, r in enumerate(rows, 1):
         text += f"{i}. {r['topic']}\n   _{r['sent_at'][:16]}_\n\n"
     await q.edit_message_text(text, reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
 
@@ -674,8 +812,8 @@ async def ann_history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not rows:
         await q.edit_message_text("📭 Duyuru yok.", reply_markup=BACK_ADMIN); return
     text = "📢 *Son 5 Duyuru:*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    for i,r in enumerate(rows,1):
-        prev = r["text"][:80] + "..." if len(r["text"])>80 else r["text"]
+    for i, r in enumerate(rows, 1):
+        prev = r["text"][:80] + "..." if len(r["text"]) > 80 else r["text"]
         text += f"{i}. {prev}\n   _{r['sent_at'][:16]}_\n\n"
     await q.edit_message_text(text, reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
 
@@ -683,13 +821,18 @@ async def ann_history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def u_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     with db() as conn:
-        rows = conn.execute("SELECT * FROM airdrops WHERE active=1 ORDER BY pinned DESC, id DESC LIMIT 10").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM airdrops WHERE active=1 ORDER BY pinned DESC, id DESC LIMIT 10"
+        ).fetchall()
     if not rows:
         await q.edit_message_text("📭 Aktif airdrop yok. Yakında eklenecek! 🔔", reply_markup=BACK_USER); return
     await q.message.reply_text(f"🪂 *{len(rows)} Aktif Airdrop:*", parse_mode=ParseMode.MARKDOWN)
-    for i,row in enumerate(rows,1):
+    for i, row in enumerate(rows, 1):
         kb = [[InlineKeyboardButton("🚀 Katıl!", url=row["link"])]] if row["link"] else []
-        await q.message.reply_text(fmt(row,i), reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode=ParseMode.MARKDOWN)
+        await q.message.reply_text(
+            fmt(row, i),
+            reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+            parse_mode=ParseMode.MARKDOWN)
     await q.message.reply_text("🔔 Yeni airdroplar için grubu takip et!", reply_markup=BACK_USER)
 
 async def u_pinned(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -698,14 +841,17 @@ async def u_pinned(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = conn.execute("SELECT * FROM airdrops WHERE pinned=1 AND active=1").fetchall()
     if not rows:
         await q.edit_message_text("📭 Sabitlenmiş airdrop yok.", reply_markup=BACK_USER); return
-    for i,row in enumerate(rows,1):
+    for i, row in enumerate(rows, 1):
         kb = [[InlineKeyboardButton("🚀 Katıl!", url=row["link"])]] if row["link"] else []
-        await q.message.reply_text(fmt(row,i), reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode=ParseMode.MARKDOWN)
+        await q.message.reply_text(
+            fmt(row, i),
+            reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+            parse_mode=ParseMode.MARKDOWN)
     await q.message.reply_text("─────", reply_markup=BACK_USER)
 
 async def u_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    kb = [[InlineKeyboardButton(c, callback_data=f"uc_{i}")] for i,c in enumerate(CATEGORIES)]
+    kb = [[InlineKeyboardButton(c, callback_data=f"uc_{i}")] for i, c in enumerate(CATEGORIES)]
     kb.append([InlineKeyboardButton("🏠 Ana Menü", callback_data="back_user")])
     await q.edit_message_text("🏷 *Kategori Seç:*", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
@@ -717,9 +863,12 @@ async def u_filter_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rows:
         await q.edit_message_text(f"📭 {cat} kategorisinde airdrop yok.", reply_markup=BACK_USER); return
     await q.message.reply_text(f"🏷 *{cat}* — {len(rows)} airdrop:", parse_mode=ParseMode.MARKDOWN)
-    for i,row in enumerate(rows,1):
+    for i, row in enumerate(rows, 1):
         kb = [[InlineKeyboardButton("🚀 Katıl!", url=row["link"])]] if row["link"] else []
-        await q.message.reply_text(fmt(row,i), reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode=ParseMode.MARKDOWN)
+        await q.message.reply_text(
+            fmt(row, i),
+            reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+            parse_mode=ParseMode.MARKDOWN)
     await q.message.reply_text("─────", reply_markup=BACK_USER)
 
 async def u_recent(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -729,9 +878,12 @@ async def u_recent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rows:
         await q.edit_message_text("📭 Airdrop yok.", reply_markup=BACK_USER); return
     await q.message.reply_text("🆕 *Son 5 Eklenen:*", parse_mode=ParseMode.MARKDOWN)
-    for i,row in enumerate(rows,1):
+    for i, row in enumerate(rows, 1):
         kb = [[InlineKeyboardButton("🚀 Katıl!", url=row["link"])]] if row["link"] else []
-        await q.message.reply_text(fmt(row,i), reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode=ParseMode.MARKDOWN)
+        await q.message.reply_text(
+            fmt(row, i),
+            reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+            parse_mode=ParseMode.MARKDOWN)
     await q.message.reply_text("─────", reply_markup=BACK_USER)
 
 async def u_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -748,11 +900,13 @@ async def u_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── GRUP KOMUTLARI ────────────────────────────────────────────────────────────
 async def cmd_airdrops(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with db() as conn:
-        rows = conn.execute("SELECT * FROM airdrops WHERE active=1 ORDER BY pinned DESC, id DESC LIMIT 5").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM airdrops WHERE active=1 ORDER BY pinned DESC, id DESC LIMIT 5"
+        ).fetchall()
     if not rows:
         await update.message.reply_text("📭 Aktif airdrop yok. 🔔 Yakında eklenecek!"); return
     text = "🪂 *Aktif Airdroplar — KriptoDropTR*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    for i,row in enumerate(rows,1):
+    for i, row in enumerate(rows, 1):
         pin  = "📌 " if row["pinned"] else ""
         link = f" | [Katıl]({row['link']})" if row["link"] else ""
         text += f"{pin}*{i}. {row['name']}* ({row['category'] or 'Genel'})\n💰 {row['reward'] or '?'} | ⏰ {row['deadline'] or '?'}{link}\n\n"
@@ -765,7 +919,7 @@ async def cmd_haberler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rows:
         await update.message.reply_text("📭 Henüz haber gönderilmemiş."); return
     text = "📰 *Son Haberler — KriptoDropTR*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    for i,r in enumerate(rows,1):
+    for i, r in enumerate(rows, 1):
         text += f"{i}. {r['topic']} _{r['sent_at'][:10]}_\n"
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
@@ -777,6 +931,7 @@ async def cmd_fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await wait.delete()
     await update.message.reply_text(result, parse_mode=ParseMode.MARKDOWN)
 
+# ── YARDIMCI HANDLERLAR ───────────────────────────────────────────────────────
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("❌ İşlem iptal edildi.", reply_markup=BACK_ADMIN)
@@ -803,22 +958,25 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d = q.data
     uid = q.from_user.id
 
-    # Ortak
+    # Ortak rotalar
     if d == "back_admin" and is_admin(uid): await back_admin(update, context); return
     if d == "back_user":                    await back_user(update, context);  return
-    if d == "price_menu":                   await price_menu(update, context);  return
+    if d == "price_menu":                   await price_menu(update, context); return
     if d.startswith("qp_"):                 await cb_quick_price(update, context); return
     if d == "price_custom":                 await price_custom_prompt(update, context); return
 
-    # Kullanıcı
+    # Kullanıcı rotaları
     if not is_admin(uid):
-        routes = {"u_list":u_list,"u_pinned":u_pinned,"u_category":u_category,"u_recent":u_recent,"u_help":u_help}
-        if d in routes: await routes[d](update, context); return
+        u_routes = {
+            "u_list": u_list, "u_pinned": u_pinned,
+            "u_category": u_category, "u_recent": u_recent, "u_help": u_help
+        }
+        if d in u_routes: await u_routes[d](update, context); return
         if d.startswith("uc_"): await u_filter_cat(update, context); return
         await q.answer("⛔ Yetki yok.", show_alert=True); return
 
-    # Admin
-    routes = {
+    # Admin rotaları
+    admin_routes = {
         "manage_airdrops": manage_airdrops,
         "mng_list":        mng_list,
         "stats":           stats_handler,
@@ -826,11 +984,12 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "news_history":    news_history_handler,
         "ann_history":     ann_history_handler,
         "coin_analysis":   coin_analysis_entry,
+        # NOT: news_do_send, ann_send artık ConversationHandler içinde — burada fallback
         "news_do_send":    news_do_send,
         "ann_send":        ann_send,
         "ann_redo":        ann_redo,
     }
-    if d in routes: await routes[d](update, context); return
+    if d in admin_routes: await admin_routes[d](update, context); return
 
     if d in ("mng_delete","mng_toggle","mng_pin","mng_broadcast"):
         await mng_action(update, context); return
@@ -840,14 +999,12 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d.startswith("do_broadcast_"):  await do_broadcast(update, context);   return
     if d.startswith("qa_"):            await cb_quick_analysis(update, context); return
     if d.startswith("send_analysis_"): await send_analysis(update, context);  return
-    if d.startswith("qnews_"):         await cb_quick_news(update, context);  return
-    if d == "news_manual":             await cb_news_manual(update, context); return
-    if d == "send_news":               await send_news_entry(update, context); return
-    if d == "ai_desc":                 await cb_ai_desc(update, context);     return
-    if d == "use_ai_desc":             await cb_use_ai_desc(update, context); return
-    if d == "manual_desc":             await cb_manual_desc(update, context); return
-    # kullanıcı routes admin için de
-    u_routes = {"u_list":u_list,"u_pinned":u_pinned,"u_category":u_category,"u_recent":u_recent,"u_help":u_help}
+
+    # Admin için kullanıcı rotaları da çalışsın
+    u_routes = {
+        "u_list": u_list, "u_pinned": u_pinned,
+        "u_category": u_category, "u_recent": u_recent, "u_help": u_help
+    }
     if d in u_routes: await u_routes[d](update, context); return
     if d.startswith("uc_"): await u_filter_cat(update, context); return
 
@@ -862,12 +1019,14 @@ async def post_init(app: Application):
         BotCommand("fiyat",    "Coin fiyatı sorgula"),
         BotCommand("iptal",    "İşlemi iptal et"),
     ])
+    logger.info("Bot komutları ayarlandı.")
 
-# ── MAIN ─────────────────────────────────────────────────────────────────────
+# ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
     init_db()
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
+    # Airdrop ekleme conversation
     airdrop_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_airdrop_entry, pattern="^add_airdrop$")],
         states={
@@ -888,18 +1047,20 @@ def main():
         allow_reentry=True, conversation_timeout=300,
     )
 
+    # Haber conversation — DÜZELTİLDİ
     news_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(send_news_entry, pattern="^send_news$")],
         states={
             NEWS_TOPIC: [
-                CallbackQueryHandler(cb_quick_news,    pattern=r"^qnews_.+"),
-                CallbackQueryHandler(cb_news_manual,   pattern="^news_manual$"),
+                CallbackQueryHandler(cb_quick_news,  pattern=r"^qnews_.+"),
+                CallbackQueryHandler(cb_news_manual, pattern="^news_manual$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, news_text_input),
             ],
             NEWS_PREVIEW: [
-                CallbackQueryHandler(news_do_send,     pattern="^news_do_send$"),
-                CallbackQueryHandler(cb_quick_news,    pattern=r"^qnews_.+"),
-                CallbackQueryHandler(send_news_entry,  pattern="^send_news$"),
+                CallbackQueryHandler(news_do_send,   pattern="^news_do_send$"),
+                CallbackQueryHandler(cb_quick_news,  pattern=r"^qnews_.+"),
+                CallbackQueryHandler(cb_news_manual, pattern="^news_manual$"),
+                CallbackQueryHandler(send_news_entry, pattern="^send_news$"),
             ],
         },
         fallbacks=[
@@ -909,10 +1070,11 @@ def main():
         allow_reentry=True, conversation_timeout=300,
     )
 
+    # Duyuru conversation
     announce_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(announce_entry, pattern="^announce$")],
         states={
-            ANNOUNCE_TEXT:    [MessageHandler(filters.TEXT & ~filters.COMMAND, announce_preview)],
+            ANNOUNCE_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, announce_preview)],
             ANNOUNCE_CONFIRM: [
                 CallbackQueryHandler(ann_send, pattern="^ann_send$"),
                 CallbackQueryHandler(ann_redo,  pattern="^ann_redo$"),
@@ -925,6 +1087,7 @@ def main():
         allow_reentry=True, conversation_timeout=300,
     )
 
+    # Fiyat conversation
     price_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(price_custom_prompt, pattern="^price_custom$")],
         states={PRICE_COIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, price_coin_input)]},
@@ -932,6 +1095,7 @@ def main():
         allow_reentry=True, conversation_timeout=120,
     )
 
+    # Handler kayıtları — Conversation'lar önce gelMELİ
     app.add_handler(CommandHandler("start",    start))
     app.add_handler(CommandHandler("airdrops", cmd_airdrops))
     app.add_handler(CommandHandler("haberler", cmd_haberler))
@@ -942,9 +1106,11 @@ def main():
     app.add_handler(announce_conv)
     app.add_handler(price_conv)
     app.add_handler(CallbackQueryHandler(cb_router))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, unknown_private))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        unknown_private))
 
-    logger.info("🚀 KriptoDropTR Bot v2.0 başlatıldı!")
+    logger.info("🚀 KriptoDropTR Bot v3.0 başlatıldı!")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
