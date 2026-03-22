@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KriptoDropTR Telegram Botu v4.0 — Scheduler + Deadline + Kullanıcı Sistemi + Admin Ayarları"""
+"""KriptoDropTR Telegram Botu v4.1 — Job-Queue düzeltildi"""
 
 import sqlite3, logging, httpx
 from datetime import datetime
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
  PRICE_COIN,
  SETTINGS_INPUT) = range(13)
 
-CATEGORIES = ["🪙 DeFi","🎮 GameFi","🖼 NFT","🔗 Layer1/Layer2","📱 Web3","🌐 Diğer"]
+CATEGORIES    = ["🪙 DeFi","🎮 GameFi","🖼 NFT","🔗 Layer1/Layer2","📱 Web3","🌐 Diğer"]
 BACK_ADMIN    = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Ana Menü", callback_data="back_admin")]])
 BACK_USER     = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Ana Menü", callback_data="back_user")]])
 BACK_SETTINGS = InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Ayarlara Dön", callback_data="settings")]])
@@ -307,8 +307,7 @@ async def show_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── AIRDROP EKLEME CONV ───────────────────────────────────────────────────────
 async def add_airdrop_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    context.user_data.clear()
+    q = update.callback_query; await q.answer(); context.user_data.clear()
     await q.message.reply_text(
         "➕ *Yeni Airdrop Ekle*\n━━━━━━━━━━━━━\n📛 *Airdrop adını* girin:\n_(Örn: Arbitrum Season 2)_\n\n❌ /iptal",
         parse_mode=ParseMode.MARKDOWN)
@@ -364,7 +363,7 @@ async def s_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = update.message.text.strip()
     context.user_data["link"] = "" if t.lower() in ("yok","-","none") else t
     await update.message.reply_text(
-        "⏰ *Son katılım tarihi:*\n_(Örn: 31.12.2025 veya 'belirsiz')_\n\n💡 GG.AA.YYYY formatında girersen deadline uyarısı aktif olur.",
+        "⏰ *Son katılım tarihi:*\n_(Örn: 31.12.2025 veya 'belirsiz')_\n\n💡 GG.AA.YYYY formatı → deadline uyarısı aktif olur.",
         parse_mode=ParseMode.MARKDOWN)
     return AIRDROP_DEADLINE
 
@@ -407,7 +406,7 @@ async def send_news_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if q: await q.answer()
     context.user_data.pop("news_content", None); context.user_data.pop("news_topic", None)
-    rows = [QUICK_TOPICS[i:i+2] for i in range(0, len(QUICK_TOPICS), 2)]
+    rows    = [QUICK_TOPICS[i:i+2] for i in range(0, len(QUICK_TOPICS), 2)]
     kb_rows = [[InlineKeyboardButton(n, callback_data=f"qnews_{t}") for n,t in row] for row in rows]
     kb_rows.append([InlineKeyboardButton("✏️ Kendi Konumu Yaz", callback_data="news_manual")])
     kb_rows.append([InlineKeyboardButton("❌ İptal", callback_data="back_admin")])
@@ -452,10 +451,10 @@ async def _gen_news(update: Update, context: ContextTypes.DEFAULT_TYPE, topic: s
     preview = f"📰 *Önizleme — {topic}*\n━━━━━━━━━━━━━━━━━━━━\n\n{content}"
     if len(preview) > 4000: preview = preview[:3990] + "..."
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Gruba Gönder", callback_data="news_do_send"),
+        [InlineKeyboardButton("✅ Gruba Gönder",    callback_data="news_do_send"),
          InlineKeyboardButton("🔄 Yeniden Oluştur", callback_data=f"qnews_{topic}")],
-        [InlineKeyboardButton("✏️ Farklı Konu", callback_data="news_manual"),
-         InlineKeyboardButton("❌ İptal", callback_data="back_admin")],
+        [InlineKeyboardButton("✏️ Farklı Konu",     callback_data="news_manual"),
+         InlineKeyboardButton("❌ İptal",            callback_data="back_admin")],
     ])
     if q: await q.message.reply_text(preview, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     else: await update.message.reply_text(preview, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
@@ -472,8 +471,7 @@ async def news_do_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(msg) > 4096: msg = msg[:4090] + "..."
     try:
         await context.bot.send_message(GROUP_ID, msg, parse_mode=ParseMode.MARKDOWN)
-        with db() as conn:
-            conn.execute("INSERT INTO news_log (topic,content) VALUES(?,?)", (topic, content))
+        with db() as conn: conn.execute("INSERT INTO news_log (topic,content) VALUES(?,?)", (topic, content))
         await q.edit_message_text(f"✅ *Haber gruba gönderildi!*\n📌 Konu: {topic}", reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         await q.edit_message_text(f"❌ *Gönderme hatası:*\n`{e}`", reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
@@ -525,7 +523,7 @@ async def send_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def announce_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     await q.message.reply_text(
-        "📢 *Duyuru Metni*\n━━━━━━━━━━━━━━\nGruba göndereceğin duyuruyu yaz:\n_(Markdown: *kalın*, _italik_)_\n\n❌ /iptal",
+        "📢 *Duyuru Metni*\n━━━━━━━━━━━━━━\nGruba göndereceğin duyuruyu yaz:\n❌ /iptal",
         parse_mode=ParseMode.MARKDOWN)
     return ANNOUNCE_TEXT
 
@@ -632,12 +630,12 @@ async def settings_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"📰 Oto-Haber: {'🟢 Kapat' if an_en else '🔴 Aç'}", callback_data="stg_toggle_auto_news")],
-        [InlineKeyboardButton("🕐 Haber Saati", callback_data="stg_set_news_hour"),
+        [InlineKeyboardButton("🕐 Haber Saati",    callback_data="stg_set_news_hour"),
          InlineKeyboardButton("📝 Haber Konuları", callback_data="stg_set_news_topic")],
         [InlineKeyboardButton(f"⏰ Deadline: {'🟢 Kapat' if dl_en else '🔴 Aç'}", callback_data="stg_toggle_deadline")],
         [InlineKeyboardButton("📆 Uyarı Kaç Gün Önce", callback_data="stg_set_deadline_days")],
         [InlineKeyboardButton(f"📅 Haftalık: {'🟢 Kapat' if wk_en else '🔴 Aç'}", callback_data="stg_toggle_weekly")],
-        [InlineKeyboardButton("📅 Özet Günü", callback_data="stg_set_weekly_day"),
+        [InlineKeyboardButton("📅 Özet Günü",  callback_data="stg_set_weekly_day"),
          InlineKeyboardButton("🕐 Özet Saati", callback_data="stg_set_weekly_hour")],
         [InlineKeyboardButton("🤖 Grok Modelini Değiştir", callback_data="stg_set_grok_model")],
         [InlineKeyboardButton("🏠 Ana Menü", callback_data="back_admin")],
@@ -646,13 +644,12 @@ async def settings_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def settings_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    d = q.data
     map_ = {
         "stg_toggle_auto_news": ("auto_news_enabled","Otomatik Haber"),
         "stg_toggle_deadline":  ("deadline_warn_enabled","Deadline Uyarısı"),
         "stg_toggle_weekly":    ("weekly_summary_enabled","Haftalık Özet"),
     }
-    key, label = map_[d]
+    key, label = map_[q.data]
     current = get_setting(key) == "1"
     set_setting(key, "0" if current else "1")
     await q.answer(f"{label} {'🔴 Kapatıldı' if current else '🟢 Açıldı'}", show_alert=True)
@@ -665,7 +662,7 @@ async def settings_input_prompt(update: Update, context: ContextTypes.DEFAULT_TY
         "stg_set_news_topic":    "📝 *Haber konularını gir* (virgülle ayır):\n_Örn: Bitcoin,Ethereum,DeFi_",
         "stg_set_deadline_days": "📆 *Kaç gün önce uyarı gelsin?* (1-30):\n_Örn: 3_",
         "stg_set_weekly_hour":   "🕐 *Haftalık özet saatini gir* (0-23):\n_Örn: 9_",
-        "stg_set_grok_model":    "🤖 *Grok modelini gir:*\n_Mevcut: grok-2-latest, grok-beta_",
+        "stg_set_grok_model":    "🤖 *Grok modelini gir:*\n_Örn: grok-2-latest veya grok-beta_",
     }
     context.user_data["settings_key"] = q.data
     await q.message.reply_text(f"{prompts[q.data]}\n\n❌ /iptal", parse_mode=ParseMode.MARKDOWN)
@@ -691,15 +688,16 @@ async def settings_day_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def settings_save_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     value = update.message.text.strip()
     key_map = {
-        "stg_set_news_hour":     ("auto_news_hour",         lambda v: str(max(0,min(23,int(v))))),
-        "stg_set_news_topic":    ("auto_news_topic",         lambda v: v),
-        "stg_set_deadline_days": ("deadline_warn_days",      lambda v: str(max(1,min(30,int(v))))),
-        "stg_set_weekly_hour":   ("weekly_summary_hour",     lambda v: str(max(0,min(23,int(v))))),
-        "stg_set_grok_model":    ("grok_model",              lambda v: v),
+        "stg_set_news_hour":     ("auto_news_hour",       lambda v: str(max(0,min(23,int(v))))),
+        "stg_set_news_topic":    ("auto_news_topic",       lambda v: v),
+        "stg_set_deadline_days": ("deadline_warn_days",    lambda v: str(max(1,min(30,int(v))))),
+        "stg_set_weekly_hour":   ("weekly_summary_hour",   lambda v: str(max(0,min(23,int(v))))),
+        "stg_set_grok_model":    ("grok_model",            lambda v: v),
     }
     sk = context.user_data.get("settings_key","")
     if sk not in key_map:
-        await update.message.reply_text("❌ Bilinmeyen ayar.", reply_markup=BACK_ADMIN); return ConversationHandler.END
+        await update.message.reply_text("❌ Bilinmeyen ayar.", reply_markup=BACK_ADMIN)
+        return ConversationHandler.END
     db_key, transform = key_map[sk]
     try:
         final = transform(value)
@@ -794,24 +792,24 @@ async def do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     with db() as conn:
-        total    = conn.execute("SELECT COUNT(*) FROM airdrops").fetchone()[0]
-        active   = conn.execute("SELECT COUNT(*) FROM airdrops WHERE active=1").fetchone()[0]
-        passive  = conn.execute("SELECT COUNT(*) FROM airdrops WHERE active=0").fetchone()[0]
-        pinned   = conn.execute("SELECT COUNT(*) FROM airdrops WHERE pinned=1").fetchone()[0]
-        bcast    = conn.execute("SELECT SUM(broadcast) FROM airdrops").fetchone()[0] or 0
-        news_n   = conn.execute("SELECT COUNT(*) FROM news_log").fetchone()[0]
-        ann_n    = conn.execute("SELECT COUNT(*) FROM announcements").fetchone()[0]
-        user_n   = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        save_n   = conn.execute("SELECT COUNT(*) FROM user_saves").fetchone()[0]
-        cats     = conn.execute("SELECT category,COUNT(*) n FROM airdrops GROUP BY category ORDER BY n DESC").fetchall()
-        month_a  = conn.execute("SELECT COUNT(*) FROM airdrops WHERE strftime('%Y-%m',created_at)=strftime('%Y-%m','now')").fetchone()[0]
-        month_n  = conn.execute("SELECT COUNT(*) FROM news_log WHERE strftime('%Y-%m',sent_at)=strftime('%Y-%m','now')").fetchone()[0]
-        last_d   = conn.execute("SELECT name,created_at FROM airdrops ORDER BY id DESC LIMIT 1").fetchone()
-        top_b    = conn.execute("SELECT name,broadcast FROM airdrops WHERE broadcast>0 ORDER BY broadcast DESC LIMIT 1").fetchone()
-        last_nws = conn.execute("SELECT topic,sent_at FROM news_log ORDER BY id DESC LIMIT 3").fetchall()
-        top_s    = conn.execute("SELECT first_name,airdrop_saves FROM users ORDER BY airdrop_saves DESC LIMIT 1").fetchone()
+        total   = conn.execute("SELECT COUNT(*) FROM airdrops").fetchone()[0]
+        active  = conn.execute("SELECT COUNT(*) FROM airdrops WHERE active=1").fetchone()[0]
+        passive = conn.execute("SELECT COUNT(*) FROM airdrops WHERE active=0").fetchone()[0]
+        pinned  = conn.execute("SELECT COUNT(*) FROM airdrops WHERE pinned=1").fetchone()[0]
+        bcast   = conn.execute("SELECT SUM(broadcast) FROM airdrops").fetchone()[0] or 0
+        news_n  = conn.execute("SELECT COUNT(*) FROM news_log").fetchone()[0]
+        ann_n   = conn.execute("SELECT COUNT(*) FROM announcements").fetchone()[0]
+        user_n  = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        save_n  = conn.execute("SELECT COUNT(*) FROM user_saves").fetchone()[0]
+        cats    = conn.execute("SELECT category,COUNT(*) n FROM airdrops GROUP BY category ORDER BY n DESC").fetchall()
+        month_a = conn.execute("SELECT COUNT(*) FROM airdrops WHERE strftime('%Y-%m',created_at)=strftime('%Y-%m','now')").fetchone()[0]
+        month_n = conn.execute("SELECT COUNT(*) FROM news_log WHERE strftime('%Y-%m',sent_at)=strftime('%Y-%m','now')").fetchone()[0]
+        last_d  = conn.execute("SELECT name,created_at FROM airdrops ORDER BY id DESC LIMIT 1").fetchone()
+        top_b   = conn.execute("SELECT name,broadcast FROM airdrops WHERE broadcast>0 ORDER BY broadcast DESC LIMIT 1").fetchone()
+        last_nw = conn.execute("SELECT topic,sent_at FROM news_log ORDER BY id DESC LIMIT 3").fetchall()
+        top_s   = conn.execute("SELECT first_name,airdrop_saves FROM users ORDER BY airdrop_saves DESC LIMIT 1").fetchone()
     cat_lines  = "\n".join([f"  {r['category'] or 'Diğer'}: *{r['n']}*" for r in cats]) or "  Henüz yok"
-    news_lines = "\n".join([f"  • {r['topic']} _({r['sent_at'][:10]})_" for r in last_nws]) or "  Henüz gönderilmedi"
+    news_lines = "\n".join([f"  • {r['topic']} _({r['sent_at'][:10]})_" for r in last_nw]) or "  Henüz gönderilmedi"
     last_a_txt = f"{last_d['name']} _({last_d['created_at'][:10]})_" if last_d else "Yok"
     top_b_txt  = f"{top_b['name']} ({top_b['broadcast']}x)" if top_b else "Yok"
     top_s_txt  = f"{top_s['first_name']} ({top_s['airdrop_saves']} kayıt)" if top_s and top_s['airdrop_saves'] > 0 else "Henüz yok"
@@ -827,7 +825,7 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"  🏅 En Aktif: {top_s_txt}\n\n"
         f"📅 *Bu Ay*\n"
         f"  Yeni Airdrop: *{month_a}* | Yeni Haber: *{month_n}*\n\n"
-        f"📰 *İçerik*: Haber: *{news_n}* | Duyuru: *{ann_n}*\n\n"
+        f"📰 *İçerik:* Haber: *{news_n}* | Duyuru: *{ann_n}*\n\n"
         f"🏷 *Kategori Dağılımı*\n{cat_lines}\n\n"
         f"📰 *Son Haberler*\n{news_lines}\n\n"
         f"🕐 _{datetime.now().strftime('%d.%m.%Y %H:%M')}_"
@@ -839,14 +837,15 @@ async def users_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with db() as conn:
         total   = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         new_wk  = conn.execute("SELECT COUNT(*) FROM users WHERE joined_at >= datetime('now','-7 days')").fetchone()[0]
-        top_lst = conn.execute("SELECT first_name,username,airdrop_saves,last_seen FROM users ORDER BY airdrop_saves DESC LIMIT 10").fetchall()
+        top_lst = conn.execute("SELECT first_name,username,airdrop_saves FROM users ORDER BY airdrop_saves DESC LIMIT 10").fetchall()
     lines = []
     for i,u in enumerate(top_lst,1):
         uname = f"@{u['username']}" if u['username'] else u['first_name'] or "Anonim"
         lines.append(f"{i}. {uname} — 💾 {u['airdrop_saves']} kayıt")
     text = (f"👤 *Kullanıcı Paneli*\n━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📊 Toplam: *{total}* | 🆕 Son 7 gün: *{new_wk}*\n\n"
-            f"🏅 *En Aktif 10 Kullanıcı:*\n" + ("\n".join(lines) or "Henüz yok.") + f"\n\n🕐 _{datetime.now().strftime('%d.%m.%Y %H:%M')}_")
+            f"🏅 *En Aktif 10 Kullanıcı:*\n" + ("\n".join(lines) or "Henüz yok.") +
+            f"\n\n🕐 _{datetime.now().strftime('%d.%m.%Y %H:%M')}_")
     await q.edit_message_text(text, reply_markup=BACK_ADMIN, parse_mode=ParseMode.MARKDOWN)
 
 async def group_info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -995,31 +994,31 @@ async def cmd_fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(result, parse_mode=ParseMode.MARKDOWN)
 
 # ── SCHEDULER ─────────────────────────────────────────────────────────────────
-_last_auto_news_run = ""  # "YYYY-MM-DD HH:MM" formatında — aynı dakikada iki kez çalışmayı önle
+_last_auto_news_run = ""
+_last_weekly_run    = ""
 
 async def auto_news_scheduler(context: ContextTypes.DEFAULT_TYPE):
     global _last_auto_news_run
     if get_setting("auto_news_enabled") != "1": return
-    now = datetime.now()
+    now      = datetime.now()
     target_h = int(get_setting("auto_news_hour","10"))
     target_m = int(get_setting("auto_news_minute","0"))
-    key = now.strftime(f"%Y-%m-%d {target_h:02d}:{target_m:02d}")
-    if now.hour == target_h and now.minute == target_m and _last_auto_news_run != key:
-        _last_auto_news_run = key
-        topics_raw = get_setting("auto_news_topic","Bitcoin")
-        topics     = [t.strip() for t in topics_raw.split(",") if t.strip()]
-        topic      = topics[now.day % len(topics)] if topics else "Bitcoin"
-        logger.info(f"Oto-haber: {topic}")
-        content = await call_grok(NEWS_SYS, f"'{topic}' hakkında KriptoDropTR grubu için güncel haber/analiz yaz.", 900)
-        if content.startswith("❌") or content.startswith("⏱"): logger.error(f"Oto-haber hatası: {content}"); return
-        msg = f"📰 *KriptoDropTR — Günlük Kripto Haber*\n━━━━━━━━━━━━━━━━━━━━\n\n{content}\n\n🔔 @KriptoDropTR"
-        if len(msg) > 4096: msg = msg[:4090] + "..."
-        try:
-            await context.bot.send_message(GROUP_ID, msg, parse_mode=ParseMode.MARKDOWN)
-            with db() as conn: conn.execute("INSERT INTO news_log (topic,content) VALUES(?,?)", (topic,content))
-            logger.info(f"Oto-haber gönderildi: {topic}")
-        except Exception as e:
-            logger.error(f"Oto-haber gönderilemedi: {e}")
+    run_key  = now.strftime(f"%Y-%m-%d {target_h:02d}:{target_m:02d}")
+    if now.hour != target_h or now.minute != target_m or _last_auto_news_run == run_key: return
+    _last_auto_news_run = run_key
+    topics  = [t.strip() for t in get_setting("auto_news_topic","Bitcoin").split(",") if t.strip()]
+    topic   = topics[now.day % len(topics)] if topics else "Bitcoin"
+    logger.info(f"Oto-haber: {topic}")
+    content = await call_grok(NEWS_SYS, f"'{topic}' hakkında KriptoDropTR grubu için güncel haber/analiz yaz.", 900)
+    if content.startswith("❌") or content.startswith("⏱"): logger.error(f"Oto-haber hatası: {content}"); return
+    msg = f"📰 *KriptoDropTR — Günlük Kripto Haber*\n━━━━━━━━━━━━━━━━━━━━\n\n{content}\n\n🔔 @KriptoDropTR"
+    if len(msg) > 4096: msg = msg[:4090] + "..."
+    try:
+        await context.bot.send_message(GROUP_ID, msg, parse_mode=ParseMode.MARKDOWN)
+        with db() as conn: conn.execute("INSERT INTO news_log (topic,content) VALUES(?,?)", (topic,content))
+        logger.info(f"Oto-haber gönderildi: {topic}")
+    except Exception as e:
+        logger.error(f"Oto-haber gönderilemedi: {e}")
 
 async def job_deadline_check(context: ContextTypes.DEFAULT_TYPE):
     if get_setting("deadline_warn_enabled") != "1": return
@@ -1046,17 +1045,15 @@ async def job_deadline_check(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Deadline uyarısı hatası: {e}")
 
-_last_weekly_run = ""
-
 async def job_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
     global _last_weekly_run
     if get_setting("weekly_summary_enabled") != "1": return
     now        = datetime.now()
     target_day = int(get_setting("weekly_summary_day","1"))
     target_h   = int(get_setting("weekly_summary_hour","9"))
-    key        = now.strftime(f"%Y-%W-{target_day}")  # Bu haftanın anahtarı
-    if now.weekday() != target_day or now.hour != target_h or _last_weekly_run == key: return
-    _last_weekly_run = key
+    week_key   = now.strftime(f"%Y-W%W-{target_day}")
+    if now.weekday() != target_day or now.hour != target_h or _last_weekly_run == week_key: return
+    _last_weekly_run = week_key
     logger.info("Haftalık özet başlatılıyor...")
     with db() as conn:
         week_drops = conn.execute("SELECT name FROM airdrops WHERE created_at>=datetime('now','-7 days') AND active=1").fetchall()
@@ -1074,9 +1071,12 @@ async def job_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
 def schedule_jobs(app: Application):
     from datetime import time as dtime
     jq = app.job_queue
-    jq.run_daily(job_deadline_check, time=dtime(8, 0))   # Her gün 08:00'de deadline kontrolü
-    jq.run_repeating(auto_news_scheduler, interval=60, first=10)  # Her dakika saat kontrolü
-    jq.run_repeating(job_weekly_summary,  interval=3600, first=30) # Her saat haftalık gün kontrolü
+    if jq is None:
+        logger.error("JobQueue yok! 'pip install python-telegram-bot[job-queue]' gerekli.")
+        return
+    jq.run_daily(job_deadline_check, time=dtime(8, 0))
+    jq.run_repeating(auto_news_scheduler, interval=60, first=10)
+    jq.run_repeating(job_weekly_summary,  interval=3600, first=30)
     logger.info("Scheduler görevleri başlatıldı.")
 
 # ── YARDIMCI ──────────────────────────────────────────────────────────────────
@@ -1116,7 +1116,6 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d.startswith("uc_"): await u_filter_cat(update, context); return
         await q.answer("⛔ Yetki yok.", show_alert=True); return
 
-    # Admin rotaları
     admin_routes = {
         "manage_airdrops": manage_airdrops, "mng_list": mng_list,
         "stats": stats_handler,             "users_panel": users_panel,
@@ -1160,7 +1159,19 @@ async def post_init(app: Application):
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
     init_db()
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+
+    # ✅ DÜZELTİLDİ: job-queue aktif etmek için .job_queue() eklendi
+    app = (Application.builder()
+           .token(BOT_TOKEN)
+           .job_queue(None)   # önce None ile başlat, sonra override edilecek
+           .post_init(post_init)
+           .build())
+
+    # Gerçek job queue — python-telegram-bot[job-queue] ile gelir
+    from telegram.ext import JobQueue
+    jq = JobQueue()
+    jq.set_application(app)
+    app._job_queue = jq  # type: ignore
 
     airdrop_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_airdrop_entry, pattern="^add_airdrop$")],
@@ -1243,7 +1254,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, unknown_private))
 
     schedule_jobs(app)
-    logger.info("🚀 KriptoDropTR Bot v4.0 başlatıldı!")
+
+    logger.info("🚀 KriptoDropTR Bot v4.1 başlatıldı!")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
