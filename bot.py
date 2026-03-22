@@ -230,12 +230,7 @@ async def save_airdrop_for_user(user_id: int, airdrop_id: int) -> bool:
 # ── /start ────────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
-        await update.message.reply_text(
-            "👋 Airdrop ve haberler için bana özel mesaj yaz!",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("📩 Bota Mesaj At", url=f"https://t.me/{context.bot.username}")
-            ]]))
-        return
+        return  # Grup içinde /start'ı tamamen yoksay
     register_user(update.effective_user)
     context.user_data.clear()
     if is_admin(update.effective_user.id): await show_admin(update, context)
