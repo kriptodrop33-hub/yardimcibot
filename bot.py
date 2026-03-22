@@ -81,7 +81,7 @@ def init_db():
             "weekly_summary_enabled": "0",
             "weekly_summary_day":     "1",
             "weekly_summary_hour":    "09",
-            "grok_model":             "grok-3",     # ✅ Düzeltildi
+            "grok_model":             "llama-3.3-70b-versatile",
             "news_footer":            "🔔 @KriptoDropTR",
         }
         for k, v in defaults.items():
@@ -120,8 +120,8 @@ def fmt(row, idx=None, admin=False):
         lines.append("📊 " + ("🟢 Aktif" if row["active"] else "🔴 Pasif"))
     return "\n".join(lines)
 
-# ── GROK AI ───────────────────────────────────────────────────────────────────
-GROK_URL = "https://api.x.ai/v1/chat/completions"
+# ── GROQ AI (Ücretsiz) ────────────────────────────────────────────────────────
+GROK_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # Haber stilleri — her biri farklı bir prompt sistemi kullanır
 NEWS_STYLES = {
@@ -178,7 +178,7 @@ QUICK_TOPICS = [
 ]
 
 async def call_grok(system: str, prompt: str, tokens: int = 900) -> str:
-    model = get_setting("grok_model", "grok-3")
+    model = get_setting("grok_model", "llama-3.3-70b-versatile")
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.post(
@@ -190,13 +190,13 @@ async def call_grok(system: str, prompt: str, tokens: int = 900) -> str:
                       "max_tokens": tokens, "temperature": 0.75}
             )
         if r.status_code == 401:
-            return "❌ API Anahtarı hatalı! Railway'de GROQ_API_KEY değerini kontrol et."
+            return "❌ API Anahtarı hatalı! Railway'de GROQ_API_KEY değerini kontrol et.\nAnahtarı https://console.groq.com adresinden alabilirsin."
         if r.status_code == 429:
             return "❌ API limit aşıldı. Birkaç dakika sonra tekrar dene."
         if r.status_code == 404:
             return (f"❌ Model bulunamadı: `{model}`\n\n"
-                    f"⚙️ Ayarlar > Grok Modeli'nden değiştir.\n"
-                    f"Geçerli modeller: `grok-3`, `grok-3-mini`, `grok-4`")
+                    f"⚙️ Ayarlar > AI Modeli'nden değiştir.\n"
+                    f"Ücretsiz modeller: `llama-3.3-70b-versatile`, `llama3-70b-8192`, `mixtral-8x7b-32768`")
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"].strip()
     except httpx.TimeoutException:
@@ -682,7 +682,7 @@ async def settings_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"📅 Haftalık: {'🟢 Kapat' if wk_en else '🔴 Aç'}", callback_data="stg_toggle_weekly")],
         [InlineKeyboardButton("📅 Özet Günü",  callback_data="stg_set_weekly_day"),
          InlineKeyboardButton("🕐 Özet Saati", callback_data="stg_set_weekly_hour")],
-        [InlineKeyboardButton("🤖 Grok Modeli",  callback_data="stg_set_grok_model"),
+        [InlineKeyboardButton("🤖 AI Modeli",   callback_data="stg_set_grok_model"),
          InlineKeyboardButton("📝 Haber Footer", callback_data="stg_set_news_footer")],
         [InlineKeyboardButton("🏠 Ana Menü", callback_data="back_admin")],
     ])
@@ -724,7 +724,7 @@ async def settings_input_prompt(update: Update, context: ContextTypes.DEFAULT_TY
         "stg_set_news_topic":    "📝 *Haber konularını gir* (virgülle ayır):\n_Örn: Bitcoin,Ethereum,DeFi_",
         "stg_set_deadline_days": "📆 *Kaç gün önce uyarı gelsin?* (1-30):\n_Örn: 3_",
         "stg_set_weekly_hour":   "🕐 *Haftalık özet saatini gir* (0-23):\n_Örn: 9_",
-        "stg_set_grok_model":    "🤖 *Grok modelini gir:*\n_Seçenekler: grok-3, grok-3-mini, grok-4_",
+        "stg_set_grok_model":    "🤖 *AI modelini gir:*\n_Ücretsiz seçenekler:_\n• `llama-3.3-70b-versatile` _(önerilen)_\n• `llama3-70b-8192`\n• `mixtral-8x7b-32768`",
         "stg_set_news_footer":   "📝 *Haber footer metnini gir:*\n_Örn: 🔔 @KriptoDropTR_",
     }
     context.user_data["settings_key"] = q.data
