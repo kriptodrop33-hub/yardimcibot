@@ -1396,42 +1396,54 @@ WELCOME_CHANNEL  = "https://t.me/kriptodropduyuru"
 WELCOME_SSS      = "https://t.me/kriptodropduyuru/47"
 WELCOME_KURALLAR = "https://t.me/kriptodropduyuru/46"
 
-async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Gruba yeni üye katıldığında karşılama mesajı gönder."""
-    for member in update.message.new_chat_members:
-        if member.is_bot:
-            continue  # Bot eklenince tetiklenmesin
-
-        # Kullanıcı adını al
-        if member.username:
-            mention = f"@{member.username}"
-        else:
-            mention = f"[{member.first_name}](tg://user?id={member.id})"
-
-        text = (
-            f"🎉 *KriptoDropTR'ye Hoş Geldiniz!*\n\n"
-            f"👋 Merhaba {mention}! Aramıza katıldığın için teşekkürler.\n\n"
-            f"🚀 Güncel airdroplardan anında haberdar olmak için\n"
-            f"🔔 *KriptoDropTR DUYURU* Kanalımıza katılmayı\n"
-            f"ve kanal bildirimlerini açmayı unutmayın!\n\n"
-            f"💎 Bol kazançlar dileriz!"
+async def _send_welcome(context, chat_id: int, user):
+    """Karşılama mesajını gönder — hem eski hem yeni event'ten çağrılır."""
+    if user.is_bot:
+        return
+    mention = f"[{user.first_name}](tg://user?id={user.id})"
+    text = (
+        f"🎉 *KriptoDropTR'ye Hoş Geldiniz\\!*\n\n"
+        f"👋 Merhaba {mention}\\! Aramıza katıldığın için teşekkürler\\.\n\n"
+        f"🚀 Güncel airdroplardan anında haberdar olmak için\n"
+        f"🔔 *KriptoDropTR DUYURU* Kanalımıza katılmayı\n"
+        f"ve kanal bildirimlerini açmayı unutmayın\\!\n\n"
+        f"💎 Bol kazançlar dileriz\\!"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 KriptoDropTR DUYURU KANALI 🎁", url=WELCOME_CHANNEL)],
+        [InlineKeyboardButton("📋 Kurallar", url=WELCOME_KURALLAR),
+         InlineKeyboardButton("❓ SSS",      url=WELCOME_SSS)],
+    ])
+    try:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=kb,
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
+        logger.info(f"Karşılama gönderildi: {user.full_name} ({user.id})")
+    except Exception as e:
+        logger.error(f"Karşılama gönderilemedi: {e}")
 
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 KriptoDropTR DUYURU KANALI 🎁", url=WELCOME_CHANNEL)],
-            [InlineKeyboardButton("📋 Kurallar",             url=WELCOME_KURALLAR),
-             InlineKeyboardButton("❓ Sıkça Sorulan Sorular (SSS)", url=WELCOME_SSS)],
-        ])
+async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Yöntem 1: Eski tip servis mesajı (new_chat_members) — küçük/eski gruplar."""
+    if not update.message or not update.message.new_chat_members:
+        return
+    for member in update.message.new_chat_members:
+        await _send_welcome(context, update.effective_chat.id, member)
 
-        try:
-            await update.message.reply_text(
-                text,
-                reply_markup=kb,
-                parse_mode=ParseMode.MARKDOWN,
-            )
-            logger.info(f"Karşılama mesajı gönderildi: {member.full_name} ({member.id})")
-        except Exception as e:
-            logger.error(f"Karşılama mesajı gönderilemedi: {e}")
+async def welcome_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Yöntem 2: Yeni tip ChatMemberUpdated — büyük/süper gruplar ve modern Telegram."""
+    result = update.chat_member
+    if not result:
+        return
+    # Sadece "üye oldu" event'ini yakala (joined veya member oldu)
+    old_status = result.old_chat_member.status
+    new_status = result.new_chat_member.status
+    user       = result.new_chat_member.user
+    # left/kicked → member/restricted geçişi = katılma
+    if old_status in ("left", "kicked") and new_status in ("member", "restricted"):
+        await _send_welcome(context, result.chat.id, user)
 
 # ── post_init ─────────────────────────────────────────────────────────────────
 async def post_init(app: Application):
@@ -1526,12 +1538,22 @@ def main():
     app.add_handler(announce_conv)
     app.add_handler(settings_conv)
     app.add_handler(CallbackQueryHandler(cb_router))
+    # Karşılama — YÖN 1: eski tip servis mesajı
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
+    # Karşılama — YÖN 2: yeni tip ChatMemberUpdated (süpergroup/modern Telegram)
+    from telegram.ext import ChatMemberHandler
+    app.add_handler(ChatMemberHandler(welcome_chat_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, unknown_private))
 
     schedule_jobs(app)
     logger.info("🚀 KriptoDropTR Bot v5.0 başlatıldı!")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    app.run_polling(
+        allowed_updates=[
+            "message", "callback_query", "chat_member",
+            "my_chat_member", "inline_query"
+        ],
+        drop_pending_updates=True
+    )
 
 if __name__ == "__main__":
     main()
