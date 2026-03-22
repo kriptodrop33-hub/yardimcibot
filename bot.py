@@ -455,21 +455,194 @@ async def cb_news_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["news_style"] = style_key
     return await _gen_news(update, context)
 
+
+# ── GERÇEK ZAMANLI PİYASA & HABER CONTEXT ────────────────────────────────────
+# Konu → CoinGecko coin ID eşleştirmesi
+TOPIC_COINS = {
+    "bitcoin":               [("Bitcoin","BTC","bitcoin")],
+    "ethereum":              [("Ethereum","ETH","ethereum")],
+    "solana":                [("Solana","SOL","solana")],
+    "bnb chain":             [("BNB Chain","BNB","binancecoin")],
+    "bnb":                   [("BNB Chain","BNB","binancecoin")],
+    "defi piyasası":         [("Bitcoin","BTC","bitcoin"),("Ethereum","ETH","ethereum"),("Uniswap","UNI","uniswap")],
+    "defi":                  [("Bitcoin","BTC","bitcoin"),("Ethereum","ETH","ethereum"),("Uniswap","UNI","uniswap")],
+    "nft piyasası":          [("Ethereum","ETH","ethereum"),("Solana","SOL","solana")],
+    "gamefi":                [("Bitcoin","BTC","bitcoin"),("Ethereum","ETH","ethereum")],
+    "kripto regülasyon":     [("Bitcoin","BTC","bitcoin"),("Ethereum","ETH","ethereum")],
+    "layer 2 projeleri":     [("Ethereum","ETH","ethereum"),("Arbitrum","ARB","arbitrum"),("Optimism","OP","optimism")],
+    "altcoin sezonu":        [("Bitcoin","BTC","bitcoin"),("Ethereum","ETH","ethereum"),("Solana","SOL","solana")],
+    "kripto piyasa genel":   [("Bitcoin","BTC","bitcoin"),("Ethereum","ETH","ethereum"),("Solana","SOL","solana"),("BNB Chain","BNB","binancecoin")],
+    "kripto airdrop trendleri": [("Bitcoin","BTC","bitcoin"),("Ethereum","ETH","ethereum")],
+}
+
+# RSS kaynaklarından haber başlığı çek
+RSS_SOURCES = [
+    ("CoinDesk",      "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+    ("CoinTelegraph", "https://cointelegraph.com/rss"),
+]
+
+async def _fetch_rss_headlines(topic: str, max_items: int = 5) -> list[str]:
+    """İki RSS kaynağından konu ile ilgili güncel haber başlıklarını çek."""
+    topic_words = [w.lower() for w in topic.split() if len(w) > 3]
+    headlines   = []
+    for source_name, url in RSS_SOURCES:
+        try:
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+                r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code != 200:
+                continue
+            text = r.text
+            # Basit XML parse — <title> taglarını çıkar
+            import re
+            titles = re.findall(r'<title><!\[CDATA\[(.*?)\]\]></title>', text)
+            if not titles:
+                titles = re.findall(r'<title>(.*?)</title>', text)
+            titles = [t.strip() for t in titles if len(t.strip()) > 20][1:]  # ilk başlık feed başlığı
+            # Konuyla ilgili olanları filtrele; yoksa ilk N tanesini al
+            matched = [t for t in titles if any(w in t.lower() for w in topic_words)]
+            selected = matched[:3] if matched else titles[:2]
+            for t in selected:
+                headlines.append(f"[{source_name}] {t}")
+            if len(headlines) >= max_items:
+                break
+        except Exception as e:
+            logger.debug(f"RSS çekme hatası ({source_name}): {e}")
+    return headlines[:max_items]
+
+async def _fetch_coin_prices(coins: list) -> dict:
+    """CoinGecko'dan fiyat, değişim ve piyasa değeri çek."""
+    ids = ",".join(c[2] for c in coins)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                "https://api.coingecko.com/api/v3/simple/price",
+                params={
+                    "ids":                ids,
+                    "vs_currencies":      "usd",
+                    "include_24hr_change":"true",
+                    "include_7d_change":  "true",
+                    "include_market_cap": "true",
+                    "include_24hr_vol":   "true",
+                })
+        return r.json() if r.status_code == 200 else {}
+    except Exception as e:
+        logger.warning(f"CoinGecko hatası: {e}")
+        return {}
+
+def _build_market_system_block(topic: str, price_data: dict, coins: list, headlines: list) -> str:
+    """
+    Gerçek verileri SYSTEM mesajının başına eklenecek bir blok olarak formatla.
+    Veriler system'a eklenir → AI bunu 'gerçek bağlam' olarak alır, görmezden gelemez.
+    """
+    today = datetime.now().strftime("%d %B %Y, %H:%M")
+    lines = [
+        "=" * 60,
+        f"GERÇEK ZAMANLI GÜNCEL VERİLER — {today}",
+        "Bu veriler canlı API'den alınmıştır. Haberde SADECE bu",
+        "verileri kullan. Asla farklı fiyat veya tarih uydurma.",
+        "=" * 60,
+        "",
+    ]
+
+    # Fiyat tablosu
+    if price_data:
+        lines.append("📊 CANLI FİYAT VERİLERİ:")
+        def fmt_n(n):
+            if n >= 1e9:  return f"${n/1e9:.2f}B"
+            if n >= 1e6:  return f"${n/1e6:.1f}M"
+            if n >= 1000: return f"${n:,.0f}"
+            return f"${n:,.4f}"
+        for name, symbol, cid in coins:
+            if cid not in price_data: continue
+            d      = price_data[cid]
+            price  = d.get("usd", 0)
+            ch24   = d.get("usd_24h_change", 0) or 0
+            ch7    = d.get("usd_7d_change", 0) or 0
+            vol    = d.get("usd_24h_vol", 0) or 0
+            mcap   = d.get("usd_market_cap", 0) or 0
+            lines.append(
+                f"  {name} ({symbol}): {fmt_n(price)} | "
+                f"24s: {'▲' if ch24>=0 else '▼'}{ch24:+.2f}% | "
+                f"7g: {'▲' if ch7>=0 else '▼'}{ch7:+.2f}% | "
+                f"Hacim: {fmt_n(vol)} | Mcap: {fmt_n(mcap)}"
+            )
+        lines.append("")
+
+    # Haber başlıkları
+    if headlines:
+        lines.append(f"📰 BUGÜNÜN GÜNCEL HABER BAŞLIKLARI ({topic} ile ilgili):")
+        for h in headlines:
+            lines.append(f"  • {h}")
+        lines.append("")
+
+    lines += [
+        "=" * 60,
+        "ÖNEMLİ: Yukarıdaki fiyatlar gerçek ve günceldir.",
+        "Haberde bu rakamlara atıfta bulun. ASLA farklı fiyat yazma.",
+        "=" * 60,
+        "",
+    ]
+    return "\n".join(lines)
+
+async def _build_news_context(topic: str) -> tuple[str, str]:
+    """
+    Hem fiyat hem haber verisi çek.
+    Döndürür: (zenginleştirilmiş_system_prefix, kısa_özet_log)
+    """
+    topic_lower = topic.lower().strip()
+
+    # Konu → coin eşleştir
+    coins = TOPIC_COINS.get(topic_lower, [])
+    if not coins:
+        for key, val in TOPIC_COINS.items():
+            if any(w in topic_lower for w in key.split() if len(w) > 3):
+                coins = val; break
+    if not coins:
+        coins = [("Bitcoin","BTC","bitcoin"), ("Ethereum","ETH","ethereum")]
+
+    # Paralel çek: fiyat + RSS aynı anda
+    import asyncio
+    price_data, headlines = await asyncio.gather(
+        _fetch_coin_prices(coins),
+        _fetch_rss_headlines(topic),
+    )
+
+    system_block = _build_market_system_block(topic, price_data, coins, headlines)
+    log_summary  = f"{len(price_data)} coin fiyatı, {len(headlines)} haber başlığı"
+    return system_block, log_summary
+
+async def call_grok_with_data(base_system: str, data_block: str, prompt: str, tokens: int = 1000) -> str:
+    """
+    Gerçek verileri system mesajının BAŞINA ekleyerek çağır.
+    Bu şekilde AI verileri 'talimat' seviyesinde görür, user mesajı gibi görmez.
+    """
+    enriched_system = data_block + "\n\n" + base_system
+    return await call_grok(enriched_system, prompt, tokens)
+
 async def _gen_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Grok ile haber üret, önizle."""
+    """Gerçek fiyat + RSS haber başlıklarıyla zenginleştirilmiş haber üret."""
     topic     = context.user_data.get("news_topic","Bitcoin")
     style_key = context.user_data.get("news_style","haber")
     style     = NEWS_STYLES.get(style_key, NEWS_STYLES["haber"])
     q         = update.callback_query
 
-    wait_text = f"⏳ *{topic}* hakkında *{style['label']}* oluşturuluyor..."
+    wait_text = f"📡 *{topic}* için canlı veri çekiliyor..."
     if q: wait = await q.message.reply_text(wait_text, parse_mode=ParseMode.MARKDOWN)
     else: wait = await update.message.reply_text(wait_text, parse_mode=ParseMode.MARKDOWN)
 
-    # Tarih bilgisini de prompt'a ekle
-    today   = datetime.now().strftime("%d %B %Y")
-    prompt  = f"Bugün: {today}. '{topic}' hakkında KriptoDropTR Telegram grubu için içerik oluştur."
-    content = await call_grok(style["system"], prompt, 1000)
+    # Paralel: fiyat + RSS haber başlıkları
+    data_block, log_summary = await _build_news_context(topic)
+    logger.info(f"Haber verisi hazır: {log_summary}")
+
+    today  = datetime.now().strftime("%d %B %Y, %H:%M")
+    prompt = (
+        f"Konu: '{topic}'\n"
+        f"Tarih: {today}\n\n"
+        f"Sistem bloğundaki GERÇEK verileri ve haber başlıklarını kullanarak "
+        f"içerik oluştur. Başlıklardaki gerçek gelişmeleri yansıt."
+    )
+    # Veriler system mesajına ekleniyor → AI görmezden gelemez
+    content = await call_grok_with_data(style["system"], data_block, prompt, 1000)
     await wait.delete()
 
     if content.startswith("❌") or content.startswith("⏱"):
@@ -1063,7 +1236,14 @@ async def auto_news_scheduler(context: ContextTypes.DEFAULT_TYPE):
     today     = now.strftime("%d %B %Y")
     logger.info(f"Oto-haber: {topic} [{style_key}]")
 
-    content = await call_grok(style["system"], f"Bugün: {today}. '{topic}' hakkında KriptoDropTR için içerik oluştur.", 1000)
+    data_block, log_summary = await _build_news_context(topic)
+    logger.info(f"Oto-haber verisi: {log_summary}")
+    prompt_text = (
+        f"Konu: '{topic}'\n"
+        f"Tarih: {today}\n\n"
+        f"Sistem bloğundaki GERÇEK verileri ve güncel haber başlıklarını kullanarak içerik oluştur."
+    )
+    content = await call_grok_with_data(style["system"], data_block, prompt_text, 1000)
     if content.startswith("❌") or content.startswith("⏱"):
         logger.error(f"Oto-haber hatası: {content}"); return
 
