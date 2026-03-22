@@ -1391,6 +1391,48 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d.startswith("uc_"): await u_filter_cat(update, context); return
     await q.answer()
 
+# ── YENİ ÜYE KARŞILAMA ───────────────────────────────────────────────────────
+WELCOME_CHANNEL  = "https://t.me/kriptodropduyuru"
+WELCOME_SSS      = "https://t.me/kriptodropduyuru/47"
+WELCOME_KURALLAR = "https://t.me/kriptodropduyuru/46"
+
+async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gruba yeni üye katıldığında karşılama mesajı gönder."""
+    for member in update.message.new_chat_members:
+        if member.is_bot:
+            continue  # Bot eklenince tetiklenmesin
+
+        # Kullanıcı adını al
+        if member.username:
+            mention = f"@{member.username}"
+        else:
+            mention = f"[{member.first_name}](tg://user?id={member.id})"
+
+        text = (
+            f"🎉 *KriptoDropTR'ye Hoş Geldiniz!*\n\n"
+            f"👋 Merhaba {mention}! Aramıza katıldığın için teşekkürler.\n\n"
+            f"🚀 Güncel airdroplardan anında haberdar olmak için\n"
+            f"🔔 *KriptoDropTR DUYURU* Kanalımıza katılmayı\n"
+            f"ve kanal bildirimlerini açmayı unutmayın!\n\n"
+            f"💎 Bol kazançlar dileriz!"
+        )
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 KriptoDropTR DUYURU KANALI 🎁", url=WELCOME_CHANNEL)],
+            [InlineKeyboardButton("📋 Kurallar",             url=WELCOME_KURALLAR),
+             InlineKeyboardButton("❓ Sıkça Sorulan Sorular (SSS)", url=WELCOME_SSS)],
+        ])
+
+        try:
+            await update.message.reply_text(
+                text,
+                reply_markup=kb,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            logger.info(f"Karşılama mesajı gönderildi: {member.full_name} ({member.id})")
+        except Exception as e:
+            logger.error(f"Karşılama mesajı gönderilemedi: {e}")
+
 # ── post_init ─────────────────────────────────────────────────────────────────
 async def post_init(app: Application):
     await app.bot.set_my_commands([
@@ -1484,6 +1526,7 @@ def main():
     app.add_handler(announce_conv)
     app.add_handler(settings_conv)
     app.add_handler(CallbackQueryHandler(cb_router))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, unknown_private))
 
     schedule_jobs(app)
