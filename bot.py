@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """KriptoDropTR Telegram Botu v5.0 — Gelişmiş Haber Sistemi"""
 
-import sqlite3, logging, httpx
+import sqlite3, logging, httpx, re
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, ConversationHandler, filters, ContextTypes
 )
-from telegram.constants import ParseMode
-from config import BOT_TOKEN, ADMIN_ID, GROUP_ID, GROK_API_KEY
+from telegram.constants import ParseMode, MessageEntityType
+from config import BOT_TOKEN, ADMIN_ID, GROUP_ID, CHANNEL_ID, GROK_API_KEY
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -1386,15 +1386,110 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d.startswith("uc_"): await u_filter_cat(update, context); return
     await q.answer()
 
+# ── AUTO AIRDROP FROM CHANNEL ──────────────────────────────────────────────────
+async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.channel_post
+    if not msg:
+        return
+    
+    if CHANNEL_ID and msg.chat.id != CHANNEL_ID:
+        return
+
+    text = msg.text or msg.caption
+    if not text:
+        return
+        
+    if "Ödül miktarı:" not in text and "Airdrop puanı:" not in text:
+        return
+        
+    title_match = re.search(r'^(.*?)\n', text)
+    title = title_match.group(1).strip() if title_match else "Bilinmeyen Airdrop"
+    
+    project_match = re.search(r'(?:🚀|🎉|🔥|\w)\s*([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+){0,2})', title)
+    project = project_match.group(1).strip() if project_match else title
+    
+    reward_match = re.search(r'Ödül miktarı:\s*(.*)', text, re.IGNORECASE)
+    reward = reward_match.group(1).strip() if reward_match else "Belirtilmedi"
+    
+    deadline_match = re.search(r'Kampanya Dönemi:\s*(.*?)(?=\n|$)', text, re.IGNORECASE)
+    deadline = deadline_match.group(1).strip() if deadline_match else "Belirsiz"
+    
+    link = "yok"
+    ents = msg.entities or msg.caption_entities or []
+    for ent in ents:
+        if ent.type == MessageEntityType.TEXT_LINK:
+            link = ent.url
+            break
+        elif ent.type == MessageEntityType.URL:
+            # We need to correctly slice python utf-16 depending on PTB version,
+            # but using parsed string length on python might be slightly off.
+            # Usually msg.parse_entity(ent) is safer, let's use it or fallback if there's an issue.
+            link = msg.parse_entity(ent) or text[ent.offset:ent.offset+ent.length]
+            break
+
+    desc_idx = text.find('Hemen Kaydol')
+    if desc_idx == -1:
+        desc_idx = text.find('Görev zorluğu')
+    
+    desc = text[:desc_idx].strip() if desc_idx > 0 else text
+    if len(desc) > 300:
+        desc = desc[:297] + "..."
+
+    try:
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO airdrops (name, project, description, reward, link, deadline, category) VALUES(?,?,?,?,?,?,?)",
+                (title, project, desc, reward, link, deadline, "Diğer")
+            )
+        logger.info(f"Kanal postundan yeni airdrop eklendi: {title}")
+    except Exception as e:
+        logger.error(f"Kanal postu eklenirken hata: {e}")
+
+# ── YENİ KOMUTLAR ─────────────────────────────────────────────────────────────
+async def cmd_iletisim(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📩 *İletişim ve Destek*\n\n"
+        "Reklam, iş birliği veya herhangi bir sorunuz için yöneticiyle iletişime geçebilirsiniz:\n"
+        "👉 @kriptodropadmin"
+    )
+    if update.effective_message:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+async def cmd_kaydet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    if msg.reply_to_message:
+        target = msg.reply_to_message
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_user.id,
+                text=f"📌 *Kaydedilen Gönderi:*\n\n{target.text or target.caption or 'İçerik bulunamadı.'}\n\n🔗 Kanal/Grup Kaynağı: {target.link or 'Bilinmiyor'}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            await msg.reply_text("✅ Gönderi özel mesaj kutuna kaydedildi!")
+        except Exception:
+            await msg.reply_text("❌ Sana özel mesaj atamıyorum. Lütfen önce bana özelden /start yaz, ardından tekrar dene.")
+    else:
+        await msg.reply_text("💡 Bir airdrop veya haber mesajını yanıtlayarak (reply) /kaydet yazarsan, onu senin özel mesaj kutuna (DM) kaydederim.")
 
 # ── post_init ─────────────────────────────────────────────────────────────────
 async def post_init(app: Application):
+    # Özel (DM) menüsü
     await app.bot.set_my_commands([
         BotCommand("start",    "Bot menüsünü aç"),
         BotCommand("airdrops", "Aktif airdropları listele"),
         BotCommand("haberler", "Son haberlere bak"),
+        BotCommand("kaydet",   "İçeriği DM'ye kaydet"),
+        BotCommand("iletisim", "Yönetici iletişimi"),
         BotCommand("iptal",    "İşlemi iptal et"),
-    ])
+    ], scope=BotCommandScopeAllPrivateChats())
+    
+    # Grup menüsü
+    await app.bot.set_my_commands([
+        BotCommand("airdrops", "🪂 Aktif Airdroplar"),
+        BotCommand("haberler", "📰 Son Kripto Haberleri"),
+        BotCommand("kaydet",   "💾 İçeriği Özelime Kaydet"),
+        BotCommand("iletisim", "📩 İletişim ve Destek"),
+    ], scope=BotCommandScopeAllGroupChats())
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
@@ -1474,11 +1569,17 @@ def main():
     app.add_handler(CommandHandler("start",    start))
     app.add_handler(CommandHandler("airdrops", cmd_airdrops))
     app.add_handler(CommandHandler("haberler", cmd_haberler))
+    app.add_handler(CommandHandler("kaydet",   cmd_kaydet))
+    app.add_handler(CommandHandler("iletisim", cmd_iletisim))
     app.add_handler(CommandHandler("iptal",    cancel))
     app.add_handler(airdrop_conv)
     app.add_handler(news_conv)
     app.add_handler(announce_conv)
     app.add_handler(settings_conv)
+    
+    # Kanal dinleyicisi
+    app.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel_post_handler))
+    
     app.add_handler(CallbackQueryHandler(cb_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, unknown_private))
 

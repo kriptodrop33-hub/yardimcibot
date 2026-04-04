@@ -21,4 +21,5 @@ def _get(key: str, cast=str, required=True):
 BOT_TOKEN    = _get("BOT_TOKEN")
 ADMIN_ID     = _get("ADMIN_ID",   cast=int)
 GROUP_ID     = _get("GROUP_ID",   cast=int)
+CHANNEL_ID   = _get("CHANNEL_ID", cast=int, required=False)
 GROK_API_KEY = _get("GROQ_API_KEY")   # Railway'deki değişken adı GROQ_API_KEY
