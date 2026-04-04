@@ -1424,14 +1424,15 @@ def parse_and_save_airdrop(msg):
     
     # Yeni Mantık: Orijinal Telegram Duyuru Postunun Linkini al
     link = "yok"
-    if msg.chat and msg.chat.username:
-        link = f"https://t.me/{msg.chat.username}/{msg.message_id}"
-    elif msg.forward_from_chat and msg.forward_from_chat.username:
+    if msg.forward_from_chat and msg.forward_from_chat.username:
         # Eğer özelden /kaydet yerine kanaldan forward yaparsanız
         link = f"https://t.me/{msg.forward_from_chat.username}/{msg.forward_from_message_id}"
     elif msg.link: 
         # Telegram API'sinin varsayılan mesaj linki (Bot bir kanaldaysa geçerlidir)
         link = msg.link
+    elif msg.chat and msg.chat.username and msg.chat.type != 'private':
+        # Eğer mesaj bir gruptan/kanaldan okunduysa
+        link = f"https://t.me/{msg.chat.username}/{msg.message_id}"
     else:
         # Link bulunamazsa en kötü ihtimal metinden ilk dış linki alalım
         ents = msg.entities or msg.caption_entities or []
