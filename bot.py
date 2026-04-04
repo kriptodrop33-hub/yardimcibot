@@ -9,7 +9,7 @@ from telegram.ext import (
     MessageHandler, ConversationHandler, filters, ContextTypes
 )
 from telegram.constants import ParseMode, MessageEntityType
-from config import BOT_TOKEN, ADMIN_ID, GROUP_ID, CHANNEL_ID, GROK_API_KEY
+from config import BOT_TOKEN, ADMIN_ID, GROUP_ID, CHANNEL_ID, GROK_API_KEY, DB_PATH
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -33,7 +33,7 @@ BACK_NEWS     = InlineKeyboardMarkup([[InlineKeyboardButton("📰 Habere Dön", 
 
 # ── VERİTABANI ────────────────────────────────────────────────────────────────
 def init_db():
-    with sqlite3.connect("kriptodrop.db") as c:
+    with sqlite3.connect(DB_PATH) as c:
         c.executescript("""
             CREATE TABLE IF NOT EXISTS airdrops (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,7 +88,7 @@ def init_db():
             c.execute("INSERT OR IGNORE INTO settings (key,value) VALUES (?,?)", (k, v))
 
 def db():
-    conn = sqlite3.connect("kriptodrop.db")
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -1331,9 +1331,23 @@ async def back_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def unknown_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private": return
-    register_user(update.effective_user)
-    if is_admin(update.effective_user.id): await update.message.reply_text("🤖 /start yazarak menüyü aç.", reply_markup=BACK_ADMIN)
-    else: await update.message.reply_text("👋 /start yazarak menüyü aç.", reply_markup=BACK_USER)
+    user = update.effective_user
+    register_user(user)
+    
+    if is_admin(user.id):
+        msg = update.effective_message
+        text = msg.text or msg.caption or ""
+        if "Ödül miktarı:" in text or "Airdrop puanı:" in text:
+            success, result = parse_and_save_airdrop(msg)
+            if success:
+                await msg.reply_text(f"✅ *Airdrop Listeye Eklendi!*\n\n📛 {result}", parse_mode=ParseMode.MARKDOWN)
+                return
+            else:
+                await msg.reply_text(f"❌ *Airdrop Eklenemedi:*\n{result}", parse_mode=ParseMode.MARKDOWN)
+                return
+        await update.message.reply_text("🤖 /start yazarak menüyü aç.", reply_markup=BACK_ADMIN)
+    else: 
+        await update.message.reply_text("👋 /start yazarak menüyü aç.", reply_markup=BACK_USER)
 
 # ── CALLBACK ROUTER ───────────────────────────────────────────────────────────
 async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1387,20 +1401,13 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
 # ── AUTO AIRDROP FROM CHANNEL ──────────────────────────────────────────────────
-async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.channel_post
-    if not msg:
-        return
-    
-    if CHANNEL_ID and msg.chat.id != CHANNEL_ID:
-        return
-
+def parse_and_save_airdrop(msg):
     text = msg.text or msg.caption
     if not text:
-        return
+        return False, "Metin bulunamadı."
         
     if "Ödül miktarı:" not in text and "Airdrop puanı:" not in text:
-        return
+        return False, "Geçerli airdrop formatı bulunamadı."
         
     title_match = re.search(r'^(.*?)\n', text)
     title = title_match.group(1).strip() if title_match else "Bilinmeyen Airdrop"
@@ -1421,9 +1428,7 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             link = ent.url
             break
         elif ent.type == MessageEntityType.URL:
-            # We need to correctly slice python utf-16 depending on PTB version,
-            # but using parsed string length on python might be slightly off.
-            # Usually msg.parse_entity(ent) is safer, let's use it or fallback if there's an issue.
+            # Fallback for text extraction
             link = msg.parse_entity(ent) or text[ent.offset:ent.offset+ent.length]
             break
 
@@ -1441,9 +1446,19 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 "INSERT INTO airdrops (name, project, description, reward, link, deadline, category) VALUES(?,?,?,?,?,?,?)",
                 (title, project, desc, reward, link, deadline, "Diğer")
             )
-        logger.info(f"Kanal postundan yeni airdrop eklendi: {title}")
+        logger.info(f"Yeni airdrop eklendi: {title}")
+        return True, title
     except Exception as e:
-        logger.error(f"Kanal postu eklenirken hata: {e}")
+        logger.error(f"Airdrop eklenirken hata: {e}")
+        return False, f"Veritabanı hatası: {e}"
+
+async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.channel_post
+    if not msg:
+        return
+    if CHANNEL_ID and msg.chat.id != CHANNEL_ID:
+        return
+    parse_and_save_airdrop(msg)
 
 # ── YENİ KOMUTLAR ─────────────────────────────────────────────────────────────
 async def cmd_iletisim(update: Update, context: ContextTypes.DEFAULT_TYPE):
