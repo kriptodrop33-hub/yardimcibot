@@ -1337,7 +1337,8 @@ async def unknown_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin(user.id):
         msg = update.effective_message
         text = msg.text or msg.caption or ""
-        if "Ödül miktarı:" in text or "Airdrop puanı:" in text:
+        logger.info(f"Admin DM mesajı alındı ({len(text)} karakter): {text[:80]}...")
+        if "Ödül miktarı" in text or "Airdrop puanı" in text or "ödül miktarı" in text.lower():
             success, result = parse_and_save_airdrop(msg)
             if success:
                 await msg.reply_text(f"✅ *Airdrop Listeye Eklendi!*\n\n📛 {result}", parse_mode=ParseMode.MARKDOWN)
@@ -1345,9 +1346,9 @@ async def unknown_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await msg.reply_text(f"❌ *Airdrop Eklenemedi:*\n{result}", parse_mode=ParseMode.MARKDOWN)
                 return
-        await update.message.reply_text("🤖 /start yazarak menüyü aç.", reply_markup=BACK_ADMIN)
+        await msg.reply_text("🤖 /start yazarak menüyü aç.", reply_markup=BACK_ADMIN)
     else: 
-        await update.message.reply_text("👋 /start yazarak menüyü aç.", reply_markup=BACK_USER)
+        await update.effective_message.reply_text("👋 /start yazarak menüyü aç.", reply_markup=BACK_USER)
 
 # ── CALLBACK ROUTER ───────────────────────────────────────────────────────────
 async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1596,7 +1597,11 @@ def main():
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel_post_handler))
     
     app.add_handler(CallbackQueryHandler(cb_router))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, unknown_private))
+    # Özel mesajdaki TÜM mesaj tiplerini yakala (metin, fotoğraf, forward vs.)
+    app.add_handler(MessageHandler(
+        (~filters.COMMAND & filters.ChatType.PRIVATE),
+        unknown_private
+    ))
 
     schedule_jobs(app)
     logger.info("🚀 KriptoDropTR Bot v5.0 başlatıldı!")
