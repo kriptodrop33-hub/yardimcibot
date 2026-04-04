@@ -1407,7 +1407,7 @@ def parse_and_save_airdrop(msg):
     if not text:
         return False, "Metin bulunamadı."
         
-    if "Ödül miktarı:" not in text and "Airdrop puanı:" not in text:
+    if "Ödül miktarı:" not in text and "Airdrop puanı" not in text and "ödül" not in text.lower():
         return False, "Geçerli airdrop formatı bulunamadı."
         
     title_match = re.search(r'^(.*?)\n', text)
@@ -1422,24 +1422,45 @@ def parse_and_save_airdrop(msg):
     deadline_match = re.search(r'Kampanya Dönemi:\s*(.*?)(?=\n|$)', text, re.IGNORECASE)
     deadline = deadline_match.group(1).strip() if deadline_match else "Belirsiz"
     
+    # Yeni Mantık: Orijinal Telegram Duyuru Postunun Linkini al
     link = "yok"
-    ents = msg.entities or msg.caption_entities or []
-    for ent in ents:
-        if ent.type == MessageEntityType.TEXT_LINK:
-            link = ent.url
-            break
-        elif ent.type == MessageEntityType.URL:
-            # Fallback for text extraction
-            link = msg.parse_entity(ent) or text[ent.offset:ent.offset+ent.length]
-            break
+    if msg.chat and msg.chat.username:
+        link = f"https://t.me/{msg.chat.username}/{msg.message_id}"
+    elif msg.forward_from_chat and msg.forward_from_chat.username:
+        # Eğer özelden /kaydet yerine kanaldan forward yaparsanız
+        link = f"https://t.me/{msg.forward_from_chat.username}/{msg.forward_from_message_id}"
+    elif msg.link: 
+        # Telegram API'sinin varsayılan mesaj linki (Bot bir kanaldaysa geçerlidir)
+        link = msg.link
+    else:
+        # Link bulunamazsa en kötü ihtimal metinden ilk dış linki alalım
+        ents = msg.entities or msg.caption_entities or []
+        for ent in ents:
+            if ent.type == MessageEntityType.TEXT_LINK:
+                link = ent.url
+                break
+            elif ent.type == MessageEntityType.URL:
+                link = msg.parse_entity(ent) or text[ent.offset:ent.offset+ent.length]
+                break
 
-    desc_idx = text.find('Hemen Kaydol')
-    if desc_idx == -1:
-        desc_idx = text.find('Görev zorluğu')
-    
-    desc = text[:desc_idx].strip() if desc_idx > 0 else text
-    if len(desc) > 300:
-        desc = desc[:297] + "..."
+    # Yeni Mantık: Upuzun metin yerine ilk bir iki cümleyi 'Açıklama' al.
+    lines = text.split('\n')
+    desc_lines = []
+    for line in lines[1:]: # Başlığı (ilk satırı) atla
+        line_clean = line.strip()
+        if line_clean and not set(line_clean).issubset(set('-=_. ')): # Boşluk veya çizgi satırlarını atla
+            # "YAPMAN GEREKENLER" veya linkler geldiğinde taramayı bitir
+            if 'YAPMAN GEREKENLER' in line or 'Hemen Kaydol' in line or 'Görev zorluğu' in line or 'Ödül' in line:
+                break
+            desc_lines.append(line_clean)
+
+    desc = " ".join(desc_lines)
+    # Eğer metin hala çok uzunsa kısalt
+    if len(desc) > 150:
+        desc = desc[:147] + "..."
+    # Bulamazsa en kötü başlığı description yapsın orası boş kalmasın
+    if not desc:
+        desc = title
 
     try:
         with db() as conn:
