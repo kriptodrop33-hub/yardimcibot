@@ -1591,9 +1591,28 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     msg = update.channel_post
     if not msg:
         return
-    if CHANNEL_ID and msg.chat.id != CHANNEL_ID:
-        return
-    parse_and_save_airdrop(msg)
+    
+    if CHANNEL_ID:
+        cid_str = str(CHANNEL_ID)
+        # IDBot bazen -100 vermez, Telegram API ise her zaman kanal ID'sini -100 ile başlatır.
+        if not cid_str.startswith("-100"):
+            cid_str = f"-100{cid_str}"
+        
+        if str(msg.chat.id) != cid_str:
+            return
+            
+    success, result = parse_and_save_airdrop(msg)
+    
+    # Başarılı olduğunda Admin'e otomatik bilgi ver
+    if success:
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"✅ *Kanaldan Otomatik Airdrop Eklendi!*\n\n📛 {result}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.debug(f"Admin'e bildirim gönderilemedi: {e}")
 
 async def group_forward_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Grupta admin'in forward ettiği mesajları airdrop olarak algıla."""
