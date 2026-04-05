@@ -1252,31 +1252,77 @@ async def auto_news_scheduler(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Oto-haber gönderilemedi: {e}")
 
+def parse_tr_date(date_str):
+    if not date_str: return None
+    date_str = date_str.lower().strip()
+    months_tr = {"ocak":1, "şubat":2, "mart":3, "nisan":4, "mayıs":5, "haziran":6,
+                 "temmuz":7, "ağustos":8, "eylül":9, "ekim":10, "kasım":11, "aralık":12}
+    
+    # 29 Mart formatı
+    m = re.search(r'(\d{1,2})\s+(ocak|şubat|mart|nisan|mayıs|haziran|temmuz|ağustos|eylül|ekim|kasım|aralık)', date_str)
+    if m:
+        day = int(m.group(1))
+        month = months_tr[m.group(2)]
+        now = datetime.now()
+        year = now.year
+        dt = datetime(year, month, day)
+        # Eğer tarih geçmiş gibi görünüyorsa ama çok geçmemişse bu yılın tarihidir.
+        if dt < now and (now - dt).days > 30:
+           dt = datetime(year + 1, month, day)
+        return dt
+        
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%d.%m.%y", "%d-%m-%Y"):
+        try: return datetime.strptime(date_str, fmt)
+        except: pass
+    return None
+
 async def job_deadline_check(context: ContextTypes.DEFAULT_TYPE):
     if get_setting("deadline_warn_enabled") != "1": return
     warn_days = int(get_setting("deadline_warn_days","3"))
     today     = datetime.now()
     with db() as conn:
-        rows = conn.execute("SELECT * FROM airdrops WHERE active=1 AND deadline!='' AND deadline_warned=0").fetchall()
+        rows = conn.execute("SELECT * FROM airdrops WHERE active=1 AND deadline!='' AND deadline!='Belirsiz' AND deadline_warned=0").fetchall()
+    
     for row in rows:
-        deadline_dt = None
-        for fmt_str in ("%d.%m.%Y","%Y-%m-%d","%d/%m/%Y"):
-            try: deadline_dt = datetime.strptime(row["deadline"].strip(), fmt_str); break
-            except: pass
+        deadline_dt = parse_tr_date(row["deadline"])
         if not deadline_dt: continue
+        
+        # Son gün gece yarısına kadar olan süreyi hesapla
+        deadline_dt = deadline_dt.replace(hour=23, minute=59, second=59)
         days_left = (deadline_dt - today).days
+        
         if 0 <= days_left <= warn_days:
             footer = get_setting("news_footer","🔔 @KriptoDropTR")
-            msg = (f"⏰ *HATIRLATMA — Airdrop Bitiyor!*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-                   f"*{row['name']}* — son *{days_left}* gün!\n"
-                   f"💰 {row['reward'] or 'Belirtilmedi'} | ⏰ {row['deadline']}\n\n{footer}")
-            kb = [[InlineKeyboardButton("🚀 Hemen Katıl!", url=row["link"])]] if row["link"] else []
+            kalan_metin = f"Sadece *{days_left} gün* kaldı!" if days_left > 0 else "🚨 BUGÜN SON GÜN! 🚨"
+            
+            msg = (
+                f"⏳ *AİRDROP SÜRESİ BİTİYOR!* ⏳\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"💠 *Proje:* {row['project'] or row['name']}\n"
+                f"🎁 *Ödül:* {row['reward'] or 'Belirtilmedi'}\n"
+                f"⏰ *Durum:* {kalan_metin}\n"
+                f"🗓 *Son Tarih:* {row['deadline']}\n\n"
+                f"⚡ _Geç kalmadan katılmak için aşağıdaki butona tıklayın!_\n\n{footer}"
+            )
+            
+            kb = []
+            if row["link"] and row["link"] != "yok":
+                kb.append([InlineKeyboardButton("🔗 Kanaldaki Gönderiye Git / Katıl", url=row["link"])])
+            
             try:
-                await context.bot.send_message(GROUP_ID, msg, reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode=ParseMode.MARKDOWN)
-                with db() as conn: conn.execute("UPDATE airdrops SET deadline_warned=1 WHERE id=?", (row["id"],))
-                logger.info(f"Deadline uyarısı: {row['name']} ({days_left}g)")
+                # Gruba gönder (GROUP_ID)
+                await context.bot.send_message(
+                    chat_id=GROUP_ID,
+                    text=msg,
+                    reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                # Sadece bir defa uyarı atması için veritabanını güncelle
+                with db() as conn: 
+                    conn.execute("UPDATE airdrops SET deadline_warned=1 WHERE id=?", (row["id"],))
+                logger.info(f"Deadline uyarısı başarıyla atıldı: {row['name']} ({days_left}g)")
             except Exception as e:
-                logger.error(f"Deadline uyarısı hatası: {e}")
+                logger.error(f"Deadline uyarısı grubu gönderim hatası: {e}")
 
 async def job_weekly_summary(context: ContextTypes.DEFAULT_TYPE):
     global _last_weekly_run
