@@ -1338,14 +1338,54 @@ async def unknown_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = update.effective_message
         text = msg.text or msg.caption or ""
         logger.info(f"Admin DM mesajı alındı ({len(text)} karakter): {text[:80]}...")
-        if "Ödül miktarı" in text or "Airdrop puanı" in text or "ödül miktarı" in text.lower():
+        
+        # ── 1) Kanaldan forward edilen mesajları DOĞRUDAN airdrop olarak dene ──
+        is_forwarded = bool(
+            msg.forward_from_chat or msg.forward_from or msg.forward_date
+            or getattr(msg, 'forward_origin', None)
+        )
+        
+        if is_forwarded and text:
+            logger.info(f"Forward mesaj algılandı, airdrop olarak parse ediliyor...")
             success, result = parse_and_save_airdrop(msg)
             if success:
-                await msg.reply_text(f"✅ *Airdrop Listeye Eklendi!*\n\n📛 {result}", parse_mode=ParseMode.MARKDOWN)
+                await msg.reply_text(
+                    f"✅ *Airdrop Listeye Eklendi!*\n\n"
+                    f"📛 *{result}*\n\n"
+                    f"💡 _Gruba duyurmak için Ana Menü → Airdrop Yönet → Gruba Duyur_",
+                    parse_mode=ParseMode.MARKDOWN, reply_markup=BACK_ADMIN)
                 return
             else:
-                await msg.reply_text(f"❌ *Airdrop Eklenemedi:*\n{result}", parse_mode=ParseMode.MARKDOWN)
+                await msg.reply_text(
+                    f"⚠️ *Otomatik parse başarısız:*\n{result}\n\n"
+                    f"💡 _Manuel eklemek için Ana Menü → Airdrop Ekle_",
+                    parse_mode=ParseMode.MARKDOWN, reply_markup=BACK_ADMIN)
                 return
+        
+        # ── 2) Normal DM metin: geniş anahtar kelime kontrolü ──
+        airdrop_keywords = [
+            "ödül", "airdrop", "reward", "bonus", "token", "kaydol",
+            "kampanya", "görev", "quest", "claim", "earn", "free",
+            "kazanma fırsatı", "dağıtım", "puanı", "hemen katıl"
+        ]
+        text_lower = text.lower()
+        if any(kw in text_lower for kw in airdrop_keywords):
+            logger.info(f"Airdrop anahtar kelimesi bulundu, parse deneniyor...")
+            success, result = parse_and_save_airdrop(msg)
+            if success:
+                await msg.reply_text(
+                    f"✅ *Airdrop Listeye Eklendi!*\n\n"
+                    f"📛 *{result}*\n\n"
+                    f"💡 _Gruba duyurmak için Ana Menü → Airdrop Yönet → Gruba Duyur_",
+                    parse_mode=ParseMode.MARKDOWN, reply_markup=BACK_ADMIN)
+                return
+            else:
+                await msg.reply_text(
+                    f"⚠️ *Otomatik parse başarısız:*\n{result}\n\n"
+                    f"💡 _Manuel eklemek için Ana Menü → Airdrop Ekle_",
+                    parse_mode=ParseMode.MARKDOWN, reply_markup=BACK_ADMIN)
+                return
+        
         await msg.reply_text("🤖 /start yazarak menüyü aç.", reply_markup=BACK_ADMIN)
     else: 
         await update.effective_message.reply_text("👋 /start yazarak menüyü aç.", reply_markup=BACK_USER)
@@ -1404,72 +1444,140 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── AUTO AIRDROP FROM CHANNEL ──────────────────────────────────────────────────
 def parse_and_save_airdrop(msg):
     text = msg.text or msg.caption
-    if not text:
-        return False, "Metin bulunamadı."
-        
-    if "Ödül miktarı:" not in text and "Airdrop puanı" not in text and "ödül" not in text.lower():
-        return False, "Geçerli airdrop formatı bulunamadı."
-        
-    title_match = re.search(r'^(.*?)\n', text)
-    title = title_match.group(1).strip() if title_match else "Bilinmeyen Airdrop"
+    if not text or len(text.strip()) < 10:
+        return False, "Metin bulunamadı veya çok kısa."
     
-    project_match = re.search(r'(?:🚀|🎉|🔥|\w)\s*([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+){0,2})', title)
-    project = project_match.group(1).strip() if project_match else title
+    # ── BAŞLIK (ilk satır) ──
+    title_match = re.search(r'^(.*?)[\n]', text)
+    title = title_match.group(1).strip() if title_match else text[:60].strip()
+    # Emojiyi temizle ama tamamen boş kalmasın
+    title_clean = re.sub(r'^[\s🚀🎉🔥🎁💰🪂⭐✨🔔📢]+', '', title).strip()
+    if title_clean:
+        title = title_clean if len(title_clean) > 3 else title
+    if not title:
+        title = "Yeni Airdrop"
+    # Başlık çok uzunsa kısalt
+    if len(title) > 80:
+        title = title[:77] + "..."
     
-    reward_match = re.search(r'Ödül miktarı:\s*(.*)', text, re.IGNORECASE)
-    reward = reward_match.group(1).strip() if reward_match else "Belirtilmedi"
+    # ── PROJE ADI ──
+    project_match = re.search(r'(?:🚀|🎉|🔥)\s*(.*?)(?:\s+(?:yeni|airdrop|bonus|kampanya))', text, re.IGNORECASE)
+    if not project_match:
+        project_match = re.search(r'(?:Proje|Project|Token)[:\s]+([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+){0,2})', text, re.IGNORECASE)
+    if not project_match:
+        # İlk satırdaki büyük harfle başlayan kelimeleri al
+        project_match = re.search(r'([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+){0,2})', title)
+    project = project_match.group(1).strip() if project_match else title[:30]
     
-    deadline_match = re.search(r'Kampanya Dönemi:\s*(.*?)(?=\n|$)', text, re.IGNORECASE)
-    deadline = deadline_match.group(1).strip() if deadline_match else "Belirsiz"
+    # ── ÖDÜL ──
+    reward = "Belirtilmedi"
+    reward_patterns = [
+        r'[Öö]dül\s*(?:miktarı)?[:\s]+(.+?)(?:\n|$)',
+        r'[Rr]eward[:\s]+(.+?)(?:\n|$)',
+        r'[Bb]onus[:\s]+(.+?)(?:\n|$)',
+        r'(\d+[\.,]?\d*\s*(?:TL|USD|\$|USDT|token|coin|puan))',
+    ]
+    for pattern in reward_patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            reward = m.group(1).strip()
+            break
     
-    # Yeni Mantık: Orijinal Telegram Duyuru Postunun Linkini al
+    # ── SON TARİH ──
+    deadline = "Belirsiz"
+    deadline_patterns = [
+        r'[Kk]ampanya\s*[Dd]önemi[:\s]+(.+?)(?:\n|$)',
+        r'[Ss]on\s*(?:tarih|katılım)[:\s]+(.+?)(?:\n|$)',
+        r'[Dd]eadline[:\s]+(.+?)(?:\n|$)',
+        r'[Bb]itiş[:\s]+(.+?)(?:\n|$)',
+        r'(\d{1,2}[./]\d{1,2}[./]\d{2,4})',  # Tarih formatı
+    ]
+    for pattern in deadline_patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            deadline = m.group(1).strip()
+            break
+    
+    # ── LİNK ──
     link = "yok"
     if msg.forward_from_chat and msg.forward_from_chat.username:
-        # Eğer özelden /kaydet yerine kanaldan forward yaparsanız
-        link = f"https://t.me/{msg.forward_from_chat.username}/{msg.forward_from_message_id}"
-    elif msg.link: 
-        # Telegram API'sinin varsayılan mesaj linki (Bot bir kanaldaysa geçerlidir)
-        link = msg.link
-    elif msg.chat and msg.chat.username and msg.chat.type != 'private':
-        # Eğer mesaj bir gruptan/kanaldan okunduysa
-        link = f"https://t.me/{msg.chat.username}/{msg.message_id}"
-    else:
-        # Link bulunamazsa en kötü ihtimal metinden ilk dış linki alalım
+        fwd_msg_id = getattr(msg, 'forward_from_message_id', None)
+        if fwd_msg_id:
+            link = f"https://t.me/{msg.forward_from_chat.username}/{fwd_msg_id}"
+        else:
+            link = f"https://t.me/{msg.forward_from_chat.username}"
+    # forward_origin kontrolü (yeni Telegram Bot API v20.8+)
+    if link == "yok" and hasattr(msg, 'forward_origin') and msg.forward_origin:
+        origin = msg.forward_origin
+        if hasattr(origin, 'chat') and origin.chat and origin.chat.username:
+            mid = getattr(origin, 'message_id', None)
+            if mid:
+                link = f"https://t.me/{origin.chat.username}/{mid}"
+            else:
+                link = f"https://t.me/{origin.chat.username}"
+    # Metinden link çıkar
+    if link == "yok":
         ents = msg.entities or msg.caption_entities or []
         for ent in ents:
-            if ent.type == MessageEntityType.TEXT_LINK:
+            if ent.type == MessageEntityType.TEXT_LINK and ent.url:
                 link = ent.url
                 break
             elif ent.type == MessageEntityType.URL:
-                link = msg.parse_entity(ent) or text[ent.offset:ent.offset+ent.length]
+                try:
+                    link = msg.parse_entity(ent) or text[ent.offset:ent.offset+ent.length]
+                except:
+                    link = text[ent.offset:ent.offset+ent.length]
                 break
-
-    # Yeni Mantık: Upuzun metin yerine ilk bir iki cümleyi 'Açıklama' al.
+    
+    # ── AÇIKLAMA ──
     lines = text.split('\n')
     desc_lines = []
-    for line in lines[1:]: # Başlığı (ilk satırı) atla
+    stop_words = ['YAPMAN GEREKENLER', 'Hemen Kaydol', 'Görev zorluğu', 
+                  'Ödül miktarı', 'ödül miktarı', 'Kampanya Dönemi',
+                  'Skor:', '---', '===', 'duyuru kanalını']
+    for line in lines[1:]:  # Başlığı atla
         line_clean = line.strip()
-        if line_clean and not set(line_clean).issubset(set('-=_. ')): # Boşluk veya çizgi satırlarını atla
-            # "YAPMAN GEREKENLER" veya linkler geldiğinde taramayı bitir
-            if 'YAPMAN GEREKENLER' in line or 'Hemen Kaydol' in line or 'Görev zorluğu' in line or 'Ödül' in line:
-                break
-            desc_lines.append(line_clean)
-
+        if not line_clean or set(line_clean).issubset(set('-=_. »›')):
+            continue
+        if any(sw in line for sw in stop_words):
+            break
+        desc_lines.append(line_clean)
+    
     desc = " ".join(desc_lines)
-    # Eğer metin hala çok uzunsa kısalt
-    if len(desc) > 150:
-        desc = desc[:147] + "..."
-    # Bulamazsa en kötü başlığı description yapsın orası boş kalmasın
+    if len(desc) > 200:
+        desc = desc[:197] + "..."
     if not desc:
         desc = title
-
+    
+    # ── KATEGORİ TAHMİNİ ──
+    category = "🌐 Diğer"
+    cat_keywords = {
+        "🪙 DeFi":          ["defi", "swap", "liquidity", "yield", "farm"],
+        "🎮 GameFi":        ["game", "gamefi", "play", "nft game", "oyun"],
+        "🖼 NFT":           ["nft", "mint", "opensea", "collectible"],
+        "🔗 Layer1/Layer2": ["layer", "l1", "l2", "chain", "mainnet", "testnet"],
+        "📱 Web3":          ["web3", "dapp", "wallet", "metamask"],
+    }
+    text_lower = text.lower()
+    for cat, keywords in cat_keywords.items():
+        if any(kw in text_lower for kw in keywords):
+            category = cat
+            break
+    
+    # ── VERITABANINA KAYDET ──
     try:
         with db() as conn:
+            # Aynı isimde airdrop var mı kontrol et (duplicate önleme)
+            existing = conn.execute("SELECT id FROM airdrops WHERE name=? AND active=1", (title,)).fetchone()
+            if existing:
+                return False, f"'{title}' adında zaten aktif bir airdrop var (ID: {existing['id']})."
+            
             conn.execute(
                 "INSERT INTO airdrops (name, project, description, reward, link, deadline, category) VALUES(?,?,?,?,?,?,?)",
-                (title, project, desc, reward, link, deadline, "Diğer")
+                (title, project, desc, reward, link, deadline, category)
             )
-        logger.info(f"Yeni airdrop eklendi: {title}")
+            new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        logger.info(f"✅ Yeni airdrop eklendi: {title} [ID:{new_id}] | Ödül: {reward} | Link: {link}")
         return True, title
     except Exception as e:
         logger.error(f"Airdrop eklenirken hata: {e}")
