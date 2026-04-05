@@ -265,6 +265,7 @@ async def show_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("⚙️ Ayarlar",            callback_data="settings")],
         [InlineKeyboardButton("👥 Grup Bilgisi",       callback_data="group_info"),
          InlineKeyboardButton("📣 Duyuru Geçmişi",     callback_data="ann_history")],
+        [InlineKeyboardButton("📝 Airdrop Şablonları", callback_data="show_sablon")],
     ])
     try: await update.effective_message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     except: await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
@@ -1421,7 +1422,7 @@ async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "ann_history": ann_history_handler,
         "news_do_send": news_do_send,       "ann_send": ann_send,
         "ann_redo": ann_redo,               "settings": settings_panel,
-        "news_retry": news_retry,
+        "news_retry": news_retry,           "show_sablon": cmd_sablon,
     }
     if d in admin_routes: await admin_routes[d](update, context); return
 
@@ -1682,6 +1683,9 @@ async def cmd_iletisim(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 async def cmd_sablon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        await update.callback_query.answer()
+    
     text = (
         "📝 *OTOMATİK KANAL POSTU ÇEKİM ŞABLONU*\n\n"
         "Kanala attığınız postların kusursuz algılanması için aşağıdaki kelimeleri / formatları kullanabilirsiniz:\n\n"
