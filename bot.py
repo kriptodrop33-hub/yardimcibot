@@ -1345,8 +1345,7 @@ async def unknown_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             # ── 1) Kanaldan forward edilen mesajları DOĞRUDAN airdrop olarak dene ──
             is_forwarded = bool(
-                msg.forward_from_chat or msg.forward_from or msg.forward_date
-                or getattr(msg, 'forward_origin', None)
+                getattr(msg, 'forward_date', None) or getattr(msg, 'forward_origin', None)
             )
             
             if is_forwarded and text:
@@ -1510,14 +1509,9 @@ def parse_and_save_airdrop(msg):
     
     # ── LİNK ──
     link = "yok"
-    if msg.forward_from_chat and msg.forward_from_chat.username:
-        fwd_msg_id = getattr(msg, 'forward_from_message_id', None)
-        if fwd_msg_id:
-            link = f"https://t.me/{msg.forward_from_chat.username}/{fwd_msg_id}"
-        else:
-            link = f"https://t.me/{msg.forward_from_chat.username}"
-    # forward_origin kontrolü (yeni Telegram Bot API v20.8+)
-    if link == "yok" and hasattr(msg, 'forward_origin') and msg.forward_origin:
+    
+    # forward_origin kontrolü (yeni Telegram Bot API ve PTB v21.5+)
+    if hasattr(msg, 'forward_origin') and msg.forward_origin:
         origin = msg.forward_origin
         if hasattr(origin, 'chat') and origin.chat and origin.chat.username:
             mid = getattr(origin, 'message_id', None)
@@ -1613,8 +1607,7 @@ async def group_forward_handler(update: Update, context: ContextTypes.DEFAULT_TY
     
     # Forward mesaj mı kontrol et
     is_forwarded = bool(
-        msg.forward_from_chat or msg.forward_from or msg.forward_date
-        or getattr(msg, 'forward_origin', None)
+        getattr(msg, 'forward_date', None) or getattr(msg, 'forward_origin', None)
     )
     if not is_forwarded:
         return
