@@ -1481,10 +1481,15 @@ def parse_and_save_airdrop(msg):
     # ── ÖDÜL ──
     reward = "Belirtilmedi"
     reward_patterns = [
-        r'[Öö]dül\s*(?:miktarı)?[:\s]+(.+?)(?:\n|$)',
-        r'[Rr]eward[:\s]+(.+?)(?:\n|$)',
+        r'[Öö]dül\s*miktarı[:\s]+(.+?)(?:\n|$)',
+        r'(?:KAZANABİLECEĞİN\s*)?[Öö]DÜLLER[:\s]+(.+?)(?:\n|$)',
+        r'[Öö]dül\s*Havuzu[:\s]+(.+?)(?:\n|$)',
+        r'(?:Toplam\s*)?[Öö]dül[:\s]+(.+?)(?:\n|$)',
+        r'(?:Kişi\s*Başı\s*)?[Öö]dül[:\s]+(.+?)(?:\n|$)',
+        r'[Kk]azanç[:\s]+(.+?)(?:\n|$)',
+        r'[Rr]eward(?:s)?[:\s]+(.+?)(?:\n|$)',
         r'[Bb]onus[:\s]+(.+?)(?:\n|$)',
-        r'(\d+[\.,]?\d*\s*(?:TL|USD|\$|USDT|token|coin|puan))',
+        r'(\d+[\.,]?\d*\s*(?:TL|USD|\$|USDT|USDC|token|coin|puan|adet))',
     ]
     for pattern in reward_patterns:
         m = re.search(pattern, text, re.IGNORECASE)
@@ -1496,10 +1501,13 @@ def parse_and_save_airdrop(msg):
     deadline = "Belirsiz"
     deadline_patterns = [
         r'[Kk]ampanya\s*[Dd]önemi[:\s]+(.+?)(?:\n|$)',
-        r'[Ss]on\s*(?:tarih|katılım)[:\s]+(.+?)(?:\n|$)',
+        r'[Ss]on\s*(?:tarih|katılım|gün)[:\s]+(.+?)(?:\n|$)',
         r'[Dd]eadline[:\s]+(.+?)(?:\n|$)',
-        r'[Bb]itiş[:\s]+(.+?)(?:\n|$)',
-        r'(\d{1,2}[./]\d{1,2}[./]\d{2,4})',  # Tarih formatı
+        r'[Bb]itiş\s*(?:tarihi)?[:\s]+(.+?)(?:\n|$)',
+        r'(?:[Ee]tkinlik\s*)?[Ss]üresi[:\s]+(.+?)(?:\n|$)',
+        r'[Kk]apanış[:\s]+(.+?)(?:\n|$)',
+        r'(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}(?:\s+\d{2}:\d{2})?)',  # 12.03.2026 veya 12-03-2026 15:00
+        r'(\d{1,2}\s+(?:Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık))', # 29 Mart
     ]
     for pattern in deadline_patterns:
         m = re.search(pattern, text, re.IGNORECASE)
@@ -1510,8 +1518,12 @@ def parse_and_save_airdrop(msg):
     # ── LİNK ──
     link = "yok"
     
+    # Doğrudan kanaldan okunan mesajsa direkt linki oluştur
+    if msg.chat and msg.chat.type == "channel" and msg.chat.username:
+        link = f"https://t.me/{msg.chat.username}/{msg.message_id}"
+        
     # forward_origin kontrolü (yeni Telegram Bot API ve PTB v21.5+)
-    if hasattr(msg, 'forward_origin') and msg.forward_origin:
+    if link == "yok" and hasattr(msg, 'forward_origin') and msg.forward_origin:
         origin = msg.forward_origin
         if hasattr(origin, 'chat') and origin.chat and origin.chat.username:
             mid = getattr(origin, 'message_id', None)
@@ -1519,6 +1531,7 @@ def parse_and_save_airdrop(msg):
                 link = f"https://t.me/{origin.chat.username}/{mid}"
             else:
                 link = f"https://t.me/{origin.chat.username}"
+                
     # Metinden link çıkar
     if link == "yok":
         ents = msg.entities or msg.caption_entities or []
@@ -1538,12 +1551,13 @@ def parse_and_save_airdrop(msg):
     desc_lines = []
     stop_words = ['YAPMAN GEREKENLER', 'Hemen Kaydol', 'Görev zorluğu', 
                   'Ödül miktarı', 'ödül miktarı', 'Kampanya Dönemi',
-                  'Skor:', '---', '===', 'duyuru kanalını']
+                  'Skor:', '---', '===', 'duyuru kanalını', 'KAZANABİLECEĞİN', 'ÖDÜLLER:']
     for line in lines[1:]:  # Başlığı atla
         line_clean = line.strip()
         if not line_clean or set(line_clean).issubset(set('-=_. »›')):
             continue
-        if any(sw in line for sw in stop_words):
+        # Çizgiler veya boşluklardan sonra stop word varsa dur
+        if any(sw in line_clean for sw in stop_words):
             break
         desc_lines.append(line_clean)
     
@@ -1667,6 +1681,32 @@ async def cmd_iletisim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_message:
         await update.effective_message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
+async def cmd_sablon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📝 *OTOMATİK KANAL POSTU ÇEKİM ŞABLONU*\n\n"
+        "Kanala attığınız postların kusursuz algılanması için aşağıdaki kelimeleri / formatları kullanabilirsiniz:\n\n"
+        "👑 *Ödül Algılayıcı Kelimeler:*\n"
+        "• `Ödül miktarı:` (Örn: Ödül miktarı: 100 USDT)\n"
+        "• `Ödüller:` (Örn: Ödüller: 50 TL)\n"
+        "• `Kazanabileceğin Ödüller:`\n"
+        "• `Toplam Ödül:` veya `Ödül Havuzu:`\n"
+        "• `Kişi Başı Ödül:` veya `Kazanç:`\n"
+        "• `Reward:` veya `Bonus:`\n"
+        "• Veya metin içinde doğrudan `100 USDT`, `50 TL`, `500 Puan` geçmesi yeterli.\n\n"
+        "⏳ *Son Tarih (Deadline) Algılayıcı Kelimeler:*\n"
+        "• `Kampanya Dönemi:` (Örn: Kampanya Dönemi: 15 Nisan)\n"
+        "• `Son tarih:`, `Son gün:`, `Son katılım:`\n"
+        "• `Bitiş:`, `Bitiş tarihi:`\n"
+        "• `Kapanış:`, `Etkinlik süresi:`\n"
+        "• `Deadline:`\n"
+        "• Veya doğrudan tarih formatı: `12.03.2026`, `29 Mart`\n\n"
+        "✂️ *Açıklama Durdurucular (Gereksiz yazıları almamak için):*\n"
+        "Şu kelimelerden birini kullandığınızda açıklamayı okumayı durdurur ve temiz bir açıklama metni çıkartır:\n"
+        "`YAPMAN GEREKENLER`, `Hemen Kaydol`, `Görev zorluğu`, `Ödül miktarı`, `Skor:`, `---`, `===`, `KAZANABİLECEĞİN`"
+    )
+    if update.effective_message:
+        await update.effective_message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
 async def cmd_kaydet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if msg.reply_to_message:
@@ -1783,6 +1823,7 @@ def main():
     app.add_handler(CommandHandler("haberler", cmd_haberler))
     app.add_handler(CommandHandler("kaydet",   cmd_kaydet))
     app.add_handler(CommandHandler("iletisim", cmd_iletisim))
+    app.add_handler(CommandHandler("sablon",   cmd_sablon))
     app.add_handler(CommandHandler("iptal",    cancel))
     app.add_handler(CommandHandler("ping",     cmd_ping))
     app.add_handler(airdrop_conv)
