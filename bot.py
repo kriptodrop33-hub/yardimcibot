@@ -1591,6 +1591,50 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     parse_and_save_airdrop(msg)
 
+async def group_forward_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Grupta admin'in forward ettiği mesajları airdrop olarak algıla."""
+    msg = update.effective_message
+    if not msg or not update.effective_user:
+        return
+    
+    # Sadece admin'in mesajlarını işle
+    if not is_admin(update.effective_user.id):
+        return
+    
+    # Forward mesaj mı kontrol et
+    is_forwarded = bool(
+        msg.forward_from_chat or msg.forward_from or msg.forward_date
+        or getattr(msg, 'forward_origin', None)
+    )
+    if not is_forwarded:
+        return
+    
+    text = msg.text or msg.caption or ""
+    if not text or len(text.strip()) < 10:
+        return
+    
+    logger.info(f"Grupta admin forward mesajı algılandı: {text[:60]}...")
+    
+    success, result = parse_and_save_airdrop(msg)
+    if success:
+        # Gruba kısa onay mesajı gönder
+        try:
+            confirm = await msg.reply_text(
+                f"✅ *Airdrop otomatik eklendi:* {result}",
+                parse_mode=ParseMode.MARKDOWN)
+            # 10 saniye sonra onay mesajını sil (grubu kirletmesin)
+            _chat_id = confirm.chat_id
+            _msg_id = confirm.message_id
+            async def _del_confirm(ctx):
+                try: await ctx.bot.delete_message(_chat_id, _msg_id)
+                except: pass
+            context.job_queue.run_once(_del_confirm, when=10, name=f"del_confirm_{_msg_id}")
+        except Exception as e:
+            logger.debug(f"Onay mesajı gönderilemedi: {e}")
+        logger.info(f"✅ Gruptan airdrop eklendi: {result}")
+    else:
+        logger.info(f"Grup forward parse başarısız: {result}")
+
 # ── YENİ KOMUTLAR ─────────────────────────────────────────────────────────────
 async def cmd_iletisim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
@@ -1725,6 +1769,12 @@ def main():
     
     # Kanal dinleyicisi
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel_post_handler))
+    
+    # Grupta admin forward mesajlarını yakala (airdrop otomatik ekleme)
+    app.add_handler(MessageHandler(
+        (filters.ChatType.GROUPS & ~filters.COMMAND & filters.FORWARDED),
+        group_forward_handler
+    ))
     
     app.add_handler(CallbackQueryHandler(cb_router))
     # Özel mesajdaki TÜM mesaj tiplerini yakala (metin, fotoğraf, forward vs.)
