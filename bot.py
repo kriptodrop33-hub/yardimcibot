@@ -1329,6 +1329,9 @@ async def back_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def back_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer(); await show_user(update, context)
 
+async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text("🏓 Pong! Bot aktif ve çalışıyor. Kod güncel.")
+
 async def unknown_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private": return
     user = update.effective_user
@@ -1339,54 +1342,61 @@ async def unknown_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = msg.text or msg.caption or ""
         logger.info(f"Admin DM mesajı alındı ({len(text)} karakter): {text[:80]}...")
         
-        # ── 1) Kanaldan forward edilen mesajları DOĞRUDAN airdrop olarak dene ──
-        is_forwarded = bool(
-            msg.forward_from_chat or msg.forward_from or msg.forward_date
-            or getattr(msg, 'forward_origin', None)
-        )
-        
-        if is_forwarded and text:
-            logger.info(f"Forward mesaj algılandı, airdrop olarak parse ediliyor...")
-            success, result = parse_and_save_airdrop(msg)
-            if success:
-                await msg.reply_text(
-                    f"✅ *Airdrop Listeye Eklendi!*\n\n"
-                    f"📛 *{result}*\n\n"
-                    f"💡 _Gruba duyurmak için Ana Menü → Airdrop Yönet → Gruba Duyur_",
-                    parse_mode=ParseMode.MARKDOWN, reply_markup=BACK_ADMIN)
-                return
-            else:
-                await msg.reply_text(
-                    f"⚠️ *Otomatik parse başarısız:*\n{result}\n\n"
-                    f"💡 _Manuel eklemek için Ana Menü → Airdrop Ekle_",
-                    parse_mode=ParseMode.MARKDOWN, reply_markup=BACK_ADMIN)
-                return
-        
-        # ── 2) Normal DM metin: geniş anahtar kelime kontrolü ──
-        airdrop_keywords = [
-            "ödül", "airdrop", "reward", "bonus", "token", "kaydol",
-            "kampanya", "görev", "quest", "claim", "earn", "free",
-            "kazanma fırsatı", "dağıtım", "puanı", "hemen katıl"
-        ]
-        text_lower = text.lower()
-        if any(kw in text_lower for kw in airdrop_keywords):
-            logger.info(f"Airdrop anahtar kelimesi bulundu, parse deneniyor...")
-            success, result = parse_and_save_airdrop(msg)
-            if success:
-                await msg.reply_text(
-                    f"✅ *Airdrop Listeye Eklendi!*\n\n"
-                    f"📛 *{result}*\n\n"
-                    f"💡 _Gruba duyurmak için Ana Menü → Airdrop Yönet → Gruba Duyur_",
-                    parse_mode=ParseMode.MARKDOWN, reply_markup=BACK_ADMIN)
-                return
-            else:
-                await msg.reply_text(
-                    f"⚠️ *Otomatik parse başarısız:*\n{result}\n\n"
-                    f"💡 _Manuel eklemek için Ana Menü → Airdrop Ekle_",
-                    parse_mode=ParseMode.MARKDOWN, reply_markup=BACK_ADMIN)
-                return
-        
-        await msg.reply_text("🤖 /start yazarak menüyü aç.", reply_markup=BACK_ADMIN)
+        try:
+            # ── 1) Kanaldan forward edilen mesajları DOĞRUDAN airdrop olarak dene ──
+            is_forwarded = bool(
+                msg.forward_from_chat or msg.forward_from or msg.forward_date
+                or getattr(msg, 'forward_origin', None)
+            )
+            
+            if is_forwarded and text:
+                logger.info(f"Forward mesaj algılandı, airdrop olarak parse ediliyor...")
+                success, result = parse_and_save_airdrop(msg)
+                
+                # Markdown parse hatalarını önlemek için MarkdownV2 veya parse_mode olmadan gönderelim
+                if success:
+                    await msg.reply_text(
+                        f"✅ Airdrop Listeye Eklendi!\n\n"
+                        f"📛 {result}\n\n"
+                        f"💡 Gruba duyurmak için Ana Menü → Airdrop Yönet → Gruba Duyur",
+                        reply_markup=BACK_ADMIN)
+                    return
+                else:
+                    await msg.reply_text(
+                        f"⚠️ Otomatik parse başarısız:\n{result}\n\n"
+                        f"💡 Manuel eklemek için Ana Menü → Airdrop Ekle",
+                        reply_markup=BACK_ADMIN)
+                    return
+            
+            # ── 2) Normal DM metin: geniş anahtar kelime kontrolü ──
+            airdrop_keywords = [
+                "ödül", "airdrop", "reward", "bonus", "token", "kaydol",
+                "kampanya", "görev", "quest", "claim", "earn", "free",
+                "kazanma fırsatı", "dağıtım", "puanı", "hemen katıl"
+            ]
+            text_lower = text.lower()
+            if any(kw in text_lower for kw in airdrop_keywords):
+                logger.info(f"Airdrop anahtar kelimesi bulundu, parse deneniyor...")
+                success, result = parse_and_save_airdrop(msg)
+                if success:
+                    await msg.reply_text(
+                        f"✅ Airdrop Listeye Eklendi!\n\n"
+                        f"📛 {result}\n\n"
+                        f"💡 Gruba duyurmak için Ana Menü → Airdrop Yönet → Gruba Duyur",
+                        reply_markup=BACK_ADMIN)
+                    return
+                else:
+                    await msg.reply_text(
+                        f"⚠️ Otomatik parse başarısız:\n{result}\n\n"
+                        f"💡 Manuel eklemek için Ana Menü → Airdrop Ekle",
+                        reply_markup=BACK_ADMIN)
+                    return
+            
+            await msg.reply_text("🤖 /start yazarak menüyü aç.", reply_markup=BACK_ADMIN)
+            
+        except Exception as e:
+            logger.error(f"unknown_private hatası: {e}")
+            await msg.reply_text(f"❌ Bir hata oluştu:\n{str(e)}")
     else: 
         await update.effective_message.reply_text("👋 /start yazarak menüyü aç.", reply_markup=BACK_USER)
 
@@ -1762,6 +1772,7 @@ def main():
     app.add_handler(CommandHandler("kaydet",   cmd_kaydet))
     app.add_handler(CommandHandler("iletisim", cmd_iletisim))
     app.add_handler(CommandHandler("iptal",    cancel))
+    app.add_handler(CommandHandler("ping",     cmd_ping))
     app.add_handler(airdrop_conv)
     app.add_handler(news_conv)
     app.add_handler(announce_conv)
